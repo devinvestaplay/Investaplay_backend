@@ -1,0 +1,68 @@
+
+data_dir: "./data/"
+
+logger:
+  stdout: true
+  level: "DEBUG"
+  file: "/tmp/nakama.log"
+  max_size: 200
+  rotation: true
+  max_backups: 1
+
+metrics:
+  reporting_freq_sec: 60
+  namespace: "stage-game"
+  stackdriver_projectid: ""
+  prometheus_port: 9200
+
+database:
+  max_idle_conns: 300
+
+runtime:
+  env:
+    - "example_apikey=example_apivalue"
+    - "encryptionkey=aAStubwFsd1m_&&UIq"
+  path: "data/modules"
+  http_key: "game_asDFGHyhu_http487ewmdc04356lvdme09"
+
+socket:
+  server_key: "game_sdafadsfOPMNTSKsaadw3214e"
+  port: 7350
+  idle_timeout_ms: 3600000
+  max_message_size_bytes: 8192
+  pong_wait_ms: 25000
+  ping_period_ms: 15000
+
+match:
+  max_empty_sec: 10
+
+# session:
+#   encryption_key: "keyggggg44enc_hokmffgh6rttf0989678"
+#   token_expiry_sec: 64800
+
+
+session:
+  single_socket: true
+  refresh_Token_expiry_sec: 216000
+  token_expiry_sec: 72000
+
+social:
+  steam:
+    publisher_key: ""
+    app_id: 0
+
+console:
+  port: 7351
+  username: "admin"
+  password: "FYUINIBHNsadafu238dasadcasdasd12314"
+  signing_key: "game_09dfgnsgoiufhllosgpdsy"
+
+
+matchmaker:
+  interval_sec: 5
+  max_intervals: 6
+  max_tickets: 4
+  rev_precision: true
+  rev_threshold: 6
+
+  

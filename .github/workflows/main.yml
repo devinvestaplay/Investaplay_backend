@@ -1,0 +1,38 @@
+name: DeployServer
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
+          script: |
+            echo "🚀 Starting deploy..."
+            cd /home/ubuntu/Projects/ServerSide-ThreeIn1Game
+
+            echo "🔄 Updating Git repo..."
+            git fetch --all
+            git reset --hard origin/main
+            echo "✅ Git updated."
+            
+            echo "🐳 Pulling latest Docker images..."
+            docker compose pull
+            echo "✅ Docker images pulled."
+            
+            echo "🏗️ Rebuilding and starting containers..."
+            docker compose up -d --build 
+            echo "✅ Containers rebuilt and running."
+            
+            echo "🎉 Deploy finished successfully!"

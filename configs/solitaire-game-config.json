@@ -1,0 +1,27 @@
+{
+  "reward_config": {
+    "move_stock_to_tableau": 5,
+    "move_stock_to_foundation": 10,
+    "move_tableau_to_foundation": 10,
+    "move_foundation_to_tableau": -10,
+    "flip_tableau_card": 5,
+    "recycle_stock": 0,
+    "complete_foundation_pile": 50,
+    "winning_game": 200,
+    "time_bonus_points_threshold_seconds": 300,
+    "time_bonus_points": 100
+  },
+  "lifeline_costs": {
+    "hint": 5,
+    "undo": 8,
+    "auto_move": 15
+  },
+  "draw_count": 1,
+  "challenge_mode_time_minutes": 10,
+  "winner_reward": {
+    "currency": 4,
+    "amount": 100
+  },
+  "time_bonus_coins_threshold_seconds": 300,
+  "time_bonus_coins": 75
+}

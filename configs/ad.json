@@ -1,0 +1,38 @@
+{
+  "banner": {
+    "type": 2,
+    "enabled": true,
+    "ad_unit_id": {
+      "ios": "pwgrmbbvusupcv68",
+      "android": "jzozrmbeqxanno13"
+    }
+  },
+  "app_keys": {
+    "ios": "24810cc1d",
+    "android": "240683d7d"
+  },
+  "rewarded": {
+    "type": 0,
+    "enabled": true,
+    "rewards": [
+      {
+        "type": 1,
+        "amount": 59
+      }
+    ],
+    "ad_unit_id": {
+      "ios": "sc30ubm4q37x905b",
+      "android": "fifxta9xzk7rs1lu"
+    }
+  },
+  "test_mode": false,
+  "interstitial": {
+    "type": 1,
+    "enabled": true,
+    "ad_unit_id": {
+      "ios": "1lvszlk5lq7zxntu",
+      "android": "rb7endmr6x206gr5"
+    },
+    "play_frequency": 3
+  }
+}

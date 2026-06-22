@@ -1,0 +1,136 @@
+{
+  "arenas": {
+    "2P_ONLINE_ARENA": {
+      "name": "2P_ONLINE_ARENA",
+      "mode": "2P_ONLINE",
+      "enabled": true,
+      "fee_cost": {
+        "type": 1,
+        "amount": 100
+      },
+      "rewards": {
+        "1": [
+          {
+            "type": 1,
+            "amount": 160
+          }
+        ],
+        "2": [
+          {
+            "type": 1,
+            "amount": 40
+          }
+        ],
+        "5": [
+          {
+            "type": 1,
+            "amount": 10
+          }
+        ]
+      },
+      "json_config": {}
+    },
+    "2P_WITH_FRIENDS_ARENA": {
+      "name": "2P_WITH_FRIENDS_ARENA",
+      "mode": "2P_WITH_FRIENDS",
+      "enabled": true,
+      "fee_cost": {
+        "type": 1,
+        "amount": 100
+      },
+      "rewards": {
+        "1": [
+          {
+            "type": 1,
+            "amount": 160
+          }
+        ],
+        "2": [
+          {
+            "type": 1,
+            "amount": 40
+          }
+        ],
+        "5": [
+          {
+            "type": 1,
+            "amount": 10
+          }
+        ]
+      },
+      "json_config": {}
+    },
+    "4P_ONLINE_ARENA": {
+      "name": "4P_ONLINE_ARENA",
+      "mode": "4P_ONLINE",
+      "enabled": true,
+      "fee_cost": {
+        "type": 1,
+        "amount": 100
+      },
+      "rewards": {
+        "1": [
+          {
+            "type": 1,
+            "amount": 300
+          }
+        ],
+        "2": [
+          {
+            "type": 1,
+            "amount": 60
+          }
+        ],
+        "3": [
+          {
+            "type": 1,
+            "amount": 40
+          }
+        ],
+        "5": [
+          {
+            "type": 1,
+            "amount": 20
+          }
+        ]
+      },
+      "json_config": {}
+    },
+    "4P_WITH_FRIENDS_ARENA": {
+      "name": "4P_WITH_FRIENDS_ARENA",
+      "mode": "4P_WITH_FRIENDS",
+      "enabled": true,
+      "fee_cost": {
+        "type": 1,
+        "amount": 100
+      },
+      "rewards": {
+        "1": [
+          {
+            "type": 1,
+            "amount": 300
+          }
+        ],
+        "2": [
+          {
+            "type": 1,
+            "amount": 60
+          }
+        ],
+        "3": [
+          {
+            "type": 1,
+            "amount": 40
+          }
+        ],
+        "5": [
+          {
+            "type": 1,
+            "amount": 20
+          }
+        ]
+      },
+      "json_config": {}
+    }
+  }
+}

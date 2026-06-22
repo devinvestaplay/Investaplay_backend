@@ -1,0 +1,15 @@
+{
+  "removeTwoWrongAnswerCoinCost": 5,
+  "passQuestionCoinCost": 8,
+  "autoCorrectCoinCost": 15,
+  "hintCoinCost": 10,
+
+  "maxLifelinesPerLevel": 4,
+  "adRefillEnabled": true,
+
+  "correctAnswerCoinReward": 10,
+  "wrongAnswerCoinReward": 0,
+  "streakBonusCoinReward": 5,
+  "fastAnswerCoinReward": 3,
+  "fastAnswerThresholdSec": 5
+}

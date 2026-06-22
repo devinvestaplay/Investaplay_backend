@@ -1,0 +1,109 @@
+{
+  "products": {
+    "coins_100": {
+      "type": "consumable",
+      "iosID": "com.investaplay.investaplay.coins_100",
+      "enabled": true,
+      "rewards": [
+        {
+          "type": 1,
+          "amount": 100
+        }
+      ],
+      "googleID": "com.investaplay.game.coins1",
+      "priority": 0,
+      "productID": "coins_100",
+      "json_config": null
+    },
+    "coins_200": {
+      "type": "consumable",
+      "iosID": "com.investaplay.investaplay.coins_500",
+      "enabled": true,
+      "rewards": [
+        {
+          "type": 1,
+          "amount": 200
+        }
+      ],
+      "googleID": "com.investaplay.game.coins2",
+      "priority": 1,
+      "productID": "coins_200",
+      "json_config": null
+    },
+    "coins_300": {
+      "type": "consumable",
+      "iosID": "com.investaplay.investaplay.coins_1000",
+      "enabled": true,
+      "rewards": [
+        {
+          "type": 1,
+          "amount": 300
+        }
+      ],
+      "googleID": "com.investaplay.game.coins3",
+      "priority": 2,
+      "productID": "coins_300",
+      "json_config": null
+    },
+    "coins_400": {
+      "type": "consumable",
+      "iosID": "com.investaplay.investaplay.coins_2000",
+      "enabled": true,
+      "rewards": [
+        {
+          "type": 1,
+          "amount": 400
+        }
+      ],
+      "googleID": "com.investaplay.game.coins4",
+      "priority": 3,
+      "productID": "coins_400",
+      "json_config": null
+    },
+    "coins_500": {
+      "type": "consumable",
+      "iosID": "com.investaplay.investaplay.coins_5000",
+      "enabled": true,
+      "rewards": [
+        {
+          "type": 1,
+          "amount": 500
+        }
+      ],
+      "googleID": "com.investaplay.game.coins5",
+      "priority": 4,
+      "productID": "coins_500",
+      "json_config": null
+    },
+    "coins_600": {
+      "type": "consumable",
+      "iosID": "com.investaplay.investaplay.coins_10000",
+      "enabled": true,
+      "rewards": [
+        {
+          "type": 1,
+          "amount": 600
+        }
+      ],
+      "googleID": "com.investaplay.game.coins6",
+      "priority": 5,
+      "productID": "coins_600",
+      "json_config": null
+    },
+    "coins_8000": {
+      "type": "consumable",
+      "iosID": "com.investaplay.investaplay.coins_10000",
+      "enabled": true,
+      "rewards": [
+        {
+          "type": 1,
+          "amount": 8000
+        }
+      ],
+      "googleID": "com.investaplay.game.coins8",
+      "priority": -1,
+      "productID": "coins_8000",
+      "json_config": null
+    }
+  }
+}
