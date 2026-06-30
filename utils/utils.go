@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"sort"
 	"time"
 )
 
@@ -118,6 +119,25 @@ func GenerateUniqueNumericUsername() string {
 	randomNumber := r.Int63n(99990000) + 1000
 
 	return fmt.Sprintf("%d", randomNumber)
+}
+
+func KeepTopNScores(scores []float64, n int) []float64 {
+	sort.Sort(sort.Reverse(sort.Float64Slice(scores)))
+	if len(scores) > n {
+		return scores[:n]
+	}
+	return scores
+}
+
+func AverageFloat64(scores []float64) float64 {
+	if len(scores) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, s := range scores {
+		sum += s
+	}
+	return sum / float64(len(scores))
 }
 
 func ReorderList[T comparable](fourList []T, twoList []T) []T {

@@ -15,6 +15,7 @@ import (
 	"game-server/systems/notfication"
 	"game-server/systems/party"
 	"game-server/systems/quiz"
+	"game-server/systems/ranking"
 	"game-server/systems/server_time"
 	"game-server/systems/shop"
 	"game-server/systems/solitaire"
@@ -109,6 +110,11 @@ func InitSystems(ctx *context.Context, logger *runtime.Logger, db *sql.DB, nk *r
 
 	// ------------------ Party
 	if err := party.InitParty(ctx, logger, nk, initializer); err != nil {
+		return err
+	}
+
+	// ------------------ Ranking / Global Skill
+	if err := ranking.InitRanking(ctx, logger, nk, initializer); err != nil {
 		return err
 	}
 

@@ -123,6 +123,33 @@ func convertToFloat64(value any) float64 {
 	}
 }
 
+func ReadUserStorageObject(ctx context.Context, nk runtime.NakamaModule, userID, collection, key string) (string, error) {
+	records, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: collection, Key: key, UserID: userID},
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(records) == 0 {
+		return "", nil
+	}
+	return records[0].Value, nil
+}
+
+func WriteUserStorageObject(ctx context.Context, nk runtime.NakamaModule, userID, collection, key, value string) error {
+	_, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      collection,
+			Key:             key,
+			UserID:          userID,
+			Value:           value,
+			PermissionRead:  1,
+			PermissionWrite: 0,
+		},
+	})
+	return err
+}
+
 // UpdateMetaData
 // like on int type will work like wallet change set
 // else set(create or update) the key:value

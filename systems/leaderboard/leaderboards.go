@@ -16,6 +16,11 @@ const (
 	LeaderboardTotalEarnedCoinsLudoID      = "total_earned_coins_ludo"
 	LeaderboardTotalEarnedCoinsQuizID      = "total_earned_coins_quiz"
 	LeaderboardTotalEarnedCoinsSolitaireID = "total_earned_coins_solitaire"
+
+	LeaderboardSkillLudoID      = "skill_ludo"
+	LeaderboardSkillQuizID      = "skill_quiz"
+	LeaderboardSkillSolitaireID = "skill_solitaire"
+	LeaderboardSkillGlobalID    = "skill_global"
 )
 
 const (
@@ -55,6 +60,20 @@ func InitLeaderboardSystem(ctx *context.Context, logger *runtime.Logger, nk *run
 	if err := (*nk).LeaderboardCreate(*ctx, LeaderboardTotalEarnedCoinsSolitaireID, true, "desc", "incr", solitaireRestTime, nil, true); err != nil {
 		(*logger).Info("Leaderboard Create LeaderboardTotalEarnedCoinsSolitaireID Failed : " + err.Error())
 		//return err
+	}
+
+	// skill leaderboards — "set" operator so score always reflects latest computed skill
+	if err := (*nk).LeaderboardCreate(*ctx, LeaderboardSkillLudoID, true, "desc", "set", "", nil, true); err != nil {
+		(*logger).Info("Leaderboard Create LeaderboardSkillLudoID Failed : " + err.Error())
+	}
+	if err := (*nk).LeaderboardCreate(*ctx, LeaderboardSkillQuizID, true, "desc", "set", "", nil, true); err != nil {
+		(*logger).Info("Leaderboard Create LeaderboardSkillQuizID Failed : " + err.Error())
+	}
+	if err := (*nk).LeaderboardCreate(*ctx, LeaderboardSkillSolitaireID, true, "desc", "set", "", nil, true); err != nil {
+		(*logger).Info("Leaderboard Create LeaderboardSkillSolitaireID Failed : " + err.Error())
+	}
+	if err := (*nk).LeaderboardCreate(*ctx, LeaderboardSkillGlobalID, true, "desc", "set", "", nil, true); err != nil {
+		(*logger).Info("Leaderboard Create LeaderboardSkillGlobalID Failed : " + err.Error())
 	}
 
 	// -------------------------------------------------------------------------------------------------------

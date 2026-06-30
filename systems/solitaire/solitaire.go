@@ -10,6 +10,7 @@ import (
 	"game-server/systems/leaderboard"
 	"game-server/systems/wallet"
 	"game-server/utils"
+	"math"
 	"net/http"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -24,7 +25,14 @@ const (
 	rpcIdSolitaireUndo     = "solitaire_game_undo"
 	rpcIdSolitaireAutoMove = "solitaire_game_auto_move"
 
-	rpcIdSolitaireFinish = "solitaire_game_finish"
+	rpcIdSolitaireFinish   = "solitaire_game_finish"
+	rpcIdSolitaireGetSkill = "solitaire_get_skill"
+
+	solitaireScoreHistoryCollection = "ScoreHistory"
+	solitaireScoreHistoryKey        = "solitaire"
+	solitaireTopK                   = 30
+	solitaireMinGames               = 5
+	solitaireTargetGames            = 30
 
 	SolitaireCollectionName = "Solitaire" // parent of all categories
 	SolitaireGameConfigKey  = "solitaire_game_config"
@@ -85,6 +93,9 @@ func InitSolitaire(ctx *context.Context, logger *runtime.Logger, nk *runtime.Nak
 	}
 
 	if err := (*initializer).RegisterRpc(rpcIdSolitaireFinish, gameFinished); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdSolitaireGetSkill, solitaireGetSkill); err != nil {
 		return err
 	}
 
@@ -214,6 +225,20 @@ func gameFinished(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	}
 	logger.Info("solitaire leaderboard for user %s: %+v", userID, lrecord)
 
+	// ----------------------------- Score History for Skill -----------------------------
+
+	hintCost := solitaireGameConfig.LifelineCosts.Hint
+	undoCost := solitaireGameConfig.LifelineCosts.Undo
+	adjustedScore := float64(finishData.Points) + float64(finishData.TimeBonus) -
+		float64(finishData.HintsUsed*hintCost) - float64(finishData.UndoUsed*undoCost)
+
+	scores, _ := readSolitaireScoreHistory(ctx, nk, userID)
+	scores = append(scores, adjustedScore)
+	scores = utils.KeepTopNScores(scores, solitaireTopK)
+	if err := writeSolitaireScoreHistory(ctx, nk, userID, scores); err != nil {
+		logger.Error("failed to write solitaire score history for user %s: %v", userID, err)
+	}
+
 	// ----------------------------- Stats Update -----------------------------
 
 	metaDataMap := make(map[string]any)
@@ -278,7 +303,100 @@ type SolitaireLifelineCosts struct {
 // -----------------------------------------------------------------------
 
 type SolitaireFinishGameData struct {
-	IsWinner bool `json:"is_winner"`
-	Coins    int  `json:"coins"`
-	Points   int  `json:"points"`
+	IsWinner  bool `json:"is_winner"`
+	Coins     int  `json:"coins"`
+	Points    int  `json:"points"`
+	TimeBonus int  `json:"time_bonus"`
+	HintsUsed int  `json:"hints_used"`
+	UndoUsed  int  `json:"undo_used"`
+}
+
+type SolitaireScoreHistory struct {
+	Scores []float64 `json:"scores"`
+}
+
+type SolitaireSkillResponse struct {
+	IsEligible   bool    `json:"is_eligible"`
+	Skill        float64 `json:"skill"`
+	GamesPlayed  int     `json:"games_played"`
+	AverageScore float64 `json:"average_score"`
+	Rank         int64   `json:"rank"`
+}
+
+// ----------------------------- Score History Helpers -----------------------------
+
+func readSolitaireScoreHistory(ctx context.Context, nk runtime.NakamaModule, userID string) ([]float64, error) {
+	raw, err := utils.ReadUserStorageObject(ctx, nk, userID, solitaireScoreHistoryCollection, solitaireScoreHistoryKey)
+	if err != nil || raw == "" {
+		return []float64{}, nil
+	}
+	var h SolitaireScoreHistory
+	if err := utils.DeserializeObjectFromStringByRefs(&raw, &h); err != nil {
+		return []float64{}, nil
+	}
+	return h.Scores, nil
+}
+
+func writeSolitaireScoreHistory(ctx context.Context, nk runtime.NakamaModule, userID string, scores []float64) error {
+	h := SolitaireScoreHistory{Scores: scores}
+	raw, err := utils.SerializeObjectToString(&h)
+	if err != nil {
+		return err
+	}
+	return utils.WriteUserStorageObject(ctx, nk, userID, solitaireScoreHistoryCollection, solitaireScoreHistoryKey, raw)
+}
+
+// ----------------------------- Skill RPC -----------------------------
+
+func solitaireGetSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		err := errors.New("invalid context")
+		return utils.CreateStatus(false, http.StatusUnauthorized, err.Error()), err
+	}
+
+	skillScore, resp, err := ComputeSolitaireSkillForUser(ctx, nk, userID)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+	}
+
+	if resp.IsEligible {
+		record, lerr := nk.LeaderboardRecordWrite(ctx, leaderboard.LeaderboardSkillSolitaireID, userID, "", int64(skillScore*1_000_000), 0, nil, nil)
+		if lerr != nil {
+			logger.Error("failed to write solitaire skill leaderboard for user %s: %v", userID, lerr)
+		} else {
+			resp.Rank = record.Rank
+		}
+	}
+
+	respJson, err := utils.SerializeObjectToString(&resp)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+	}
+	return respJson, nil
+}
+
+// ComputeSolitaireSkillForUser is exported so the global ranking RPC can call it.
+func ComputeSolitaireSkillForUser(ctx context.Context, nk runtime.NakamaModule, userID string) (float64, SolitaireSkillResponse, error) {
+	scores, err := readSolitaireScoreHistory(ctx, nk, userID)
+	if err != nil {
+		return 0, SolitaireSkillResponse{}, err
+	}
+
+	n := len(scores)
+	resp := SolitaireSkillResponse{GamesPlayed: n}
+
+	if n < solitaireMinGames {
+		resp.IsEligible = false
+		return 0, resp, nil
+	}
+
+	avg := utils.AverageFloat64(scores)
+	confidence := math.Min(1, math.Sqrt(float64(n)/float64(solitaireTargetGames)))
+	skill := avg * confidence
+
+	resp.IsEligible = true
+	resp.AverageScore = avg
+	resp.Skill = skill
+	return skill, resp, nil
 }

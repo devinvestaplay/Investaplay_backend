@@ -9,6 +9,7 @@ import (
 	"game-server/systems/leaderboard"
 	"game-server/systems/wallet"
 	"game-server/utils"
+	"math"
 	"net/http"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -37,7 +38,14 @@ const (
 	rpcIdQuizAutoCorrect  = "quiz_game_autocorrect"
 	rpcIdQuizHint         = "quiz_game_hint"
 
-	rpcIdQuizFinish = "quiz_game_finish"
+	rpcIdQuizFinish    = "quiz_game_finish"
+	rpcIdQuizGetSkill  = "quiz_get_skill"
+
+	quizScoreHistoryCollection = "ScoreHistory"
+	quizScoreHistoryKey        = "quiz"
+	quizTopK                   = 200
+	quizMinAttempts            = 20
+	quizTargetAttempts         = 60
 
 	QuizCollectionName = "Quiz" // parent of all categories
 	QuizCategoriesKey  = "quiz_categories"
@@ -142,6 +150,9 @@ func InitQuiz(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaMo
 	}
 
 	if err := (*initializer).RegisterRpc(rpcIdQuizFinish, gameFinished); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdQuizGetSkill, quizGetSkill); err != nil {
 		return err
 	}
 
@@ -567,6 +578,21 @@ func gameFinished(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	}
 	logger.Info("quiz leaderboard for user %s: %+v", userID, lrecord)
 
+	// ----------------------------- Score History for Skill -----------------------------
+
+	penalty := quizConfig.LifelinePenalty
+	if penalty == 0 {
+		penalty = 10
+	}
+	adjustedScore := float64(finishData.Points) - float64(finishData.LifelinesUsed*penalty)
+
+	scores, _ := readQuizScoreHistory(ctx, nk, userID)
+	scores = append(scores, adjustedScore)
+	scores = utils.KeepTopNScores(scores, quizTopK)
+	if err := writeQuizScoreHistory(ctx, nk, userID, scores); err != nil {
+		logger.Error("failed to write quiz score history for user %s: %v", userID, err)
+	}
+
 	// ----------------------------- Stats Update -----------------------------
 
 	metaDataMap := make(map[string]any)
@@ -681,10 +707,102 @@ type QuizConfig struct {
 	FastAnswerCoinReward    int `json:"fastAnswerCoinReward"`
 	FastAnswerThresholdSec  int `json:"fastAnswerThresholdSec"`
 	NumberOfQuestions       int `json:"numberOfQuestions"`
+	LifelinePenalty         int `json:"lifeline_penalty"`
 }
 
 type QuizFinishGameData struct {
-	IsWinner bool `json:"is_winner"`
-	Coins    int  `json:"coins"`
-	Points   int  `json:"points"`
+	IsWinner      bool `json:"is_winner"`
+	Coins         int  `json:"coins"`
+	Points        int  `json:"points"`
+	LifelinesUsed int  `json:"lifelines_used"`
+}
+
+type QuizScoreHistory struct {
+	Scores []float64 `json:"scores"`
+}
+
+type QuizSkillResponse struct {
+	IsEligible   bool    `json:"is_eligible"`
+	Skill        float64 `json:"skill"`
+	GamesPlayed  int     `json:"games_played"`
+	AverageScore float64 `json:"average_score"`
+	Rank         int64   `json:"rank"`
+}
+
+// ----------------------------- Score History Helpers -----------------------------
+
+func readQuizScoreHistory(ctx context.Context, nk runtime.NakamaModule, userID string) ([]float64, error) {
+	raw, err := utils.ReadUserStorageObject(ctx, nk, userID, quizScoreHistoryCollection, quizScoreHistoryKey)
+	if err != nil || raw == "" {
+		return []float64{}, nil
+	}
+	var h QuizScoreHistory
+	if err := utils.DeserializeObjectFromStringByRefs(&raw, &h); err != nil {
+		return []float64{}, nil
+	}
+	return h.Scores, nil
+}
+
+func writeQuizScoreHistory(ctx context.Context, nk runtime.NakamaModule, userID string, scores []float64) error {
+	h := QuizScoreHistory{Scores: scores}
+	raw, err := utils.SerializeObjectToString(&h)
+	if err != nil {
+		return err
+	}
+	return utils.WriteUserStorageObject(ctx, nk, userID, quizScoreHistoryCollection, quizScoreHistoryKey, raw)
+}
+
+// ----------------------------- Skill RPC -----------------------------
+
+func quizGetSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		err := errors.New("invalid context")
+		return utils.CreateStatus(false, http.StatusUnauthorized, err.Error()), err
+	}
+
+	skillScore, resp, err := ComputeQuizSkillForUser(ctx, nk, userID)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+	}
+
+	if resp.IsEligible {
+		record, lerr := nk.LeaderboardRecordWrite(ctx, leaderboard.LeaderboardSkillQuizID, userID, "", int64(skillScore*1_000_000), 0, nil, nil)
+		if lerr != nil {
+			logger.Error("failed to write quiz skill leaderboard for user %s: %v", userID, lerr)
+		} else {
+			resp.Rank = record.Rank
+		}
+	}
+
+	respJson, err := utils.SerializeObjectToString(&resp)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+	}
+	return respJson, nil
+}
+
+// ComputeQuizSkillForUser is exported so the global ranking RPC can call it.
+func ComputeQuizSkillForUser(ctx context.Context, nk runtime.NakamaModule, userID string) (float64, QuizSkillResponse, error) {
+	scores, err := readQuizScoreHistory(ctx, nk, userID)
+	if err != nil {
+		return 0, QuizSkillResponse{}, err
+	}
+
+	n := len(scores)
+	resp := QuizSkillResponse{GamesPlayed: n}
+
+	if n < quizMinAttempts {
+		resp.IsEligible = false
+		return 0, resp, nil
+	}
+
+	avg := utils.AverageFloat64(scores)
+	confidence := math.Min(1, math.Sqrt(float64(n)/float64(quizTargetAttempts)))
+	skill := avg * confidence
+
+	resp.IsEligible = true
+	resp.AverageScore = avg
+	resp.Skill = skill
+	return skill, resp, nil
 }

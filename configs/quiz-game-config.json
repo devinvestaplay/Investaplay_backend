@@ -11,5 +11,6 @@
   "wrongAnswerCoinReward": 0,
   "streakBonusCoinReward": 5,
   "fastAnswerCoinReward": 3,
-  "fastAnswerThresholdSec": 5
+  "fastAnswerThresholdSec": 5,
+  "lifeline_penalty": 10
 }
