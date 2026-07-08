@@ -55,12 +55,12 @@ func getGlobalSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
 	}
 
-	quizScore, quizResp, err := quiz.ComputeQuizSkillForUser(ctx, nk, userID)
+	quizScore, quizResp, err := quiz.ComputeQuizSkillForUser(ctx, db, nk, userID)
 	if err != nil {
 		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
 	}
 
-	solScore, solResp, err := solitaire.ComputeSolitaireSkillForUser(ctx, nk, userID)
+	solScore, solResp, err := solitaire.ComputeSolitaireSkillForUser(ctx, db, nk, userID)
 	if err != nil {
 		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
 	}

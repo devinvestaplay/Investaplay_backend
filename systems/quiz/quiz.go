@@ -724,6 +724,8 @@ type QuizScoreHistory struct {
 type QuizSkillResponse struct {
 	IsEligible   bool    `json:"is_eligible"`
 	Skill        float64 `json:"skill"`
+	Percentile   float64 `json:"percentile"`
+	Confidence   float64 `json:"confidence"`
 	GamesPlayed  int     `json:"games_played"`
 	AverageScore float64 `json:"average_score"`
 	Rank         int64   `json:"rank"`
@@ -761,19 +763,12 @@ func quizGetSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		return utils.CreateStatus(false, http.StatusUnauthorized, err.Error()), err
 	}
 
-	skillScore, resp, err := ComputeQuizSkillForUser(ctx, nk, userID)
+	skillScore, resp, err := ComputeQuizSkillForUser(ctx, db, nk, userID)
 	if err != nil {
 		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
 	}
 
-	if resp.IsEligible {
-		record, lerr := nk.LeaderboardRecordWrite(ctx, leaderboard.LeaderboardSkillQuizID, userID, "", int64(skillScore*1_000_000), 0, nil, nil)
-		if lerr != nil {
-			logger.Error("failed to write quiz skill leaderboard for user %s: %v", userID, lerr)
-		} else {
-			resp.Rank = record.Rank
-		}
-	}
+	_ = skillScore
 
 	respJson, err := utils.SerializeObjectToString(&resp)
 	if err != nil {
@@ -783,7 +778,8 @@ func quizGetSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 }
 
 // ComputeQuizSkillForUser is exported so the global ranking RPC can call it.
-func ComputeQuizSkillForUser(ctx context.Context, nk runtime.NakamaModule, userID string) (float64, QuizSkillResponse, error) {
+// Formula: Skill = Percentile × Confidence
+func ComputeQuizSkillForUser(ctx context.Context, db *sql.DB, nk runtime.NakamaModule, userID string) (float64, QuizSkillResponse, error) {
 	scores, err := readQuizScoreHistory(ctx, nk, userID)
 	if err != nil {
 		return 0, QuizSkillResponse{}, err
@@ -799,10 +795,24 @@ func ComputeQuizSkillForUser(ctx context.Context, nk runtime.NakamaModule, userI
 
 	avg := utils.AverageFloat64(scores)
 	confidence := math.Min(1, math.Sqrt(float64(n)/float64(quizTargetAttempts)))
-	skill := avg * confidence
+
+	// Write avg score to leaderboard to establish ranking position
+	leaderboardScore := int64(avg * 1000)
+	record, lerr := nk.LeaderboardRecordWrite(ctx, leaderboard.LeaderboardSkillQuizID, userID, "", leaderboardScore, 0, nil, nil)
+	if lerr != nil {
+		return 0, resp, lerr
+	}
+
+	// Percentile = (L + 0.5 × E) / N × 100
+	percentile := utils.ComputePercentile(ctx, db, leaderboard.LeaderboardSkillQuizID, leaderboardScore)
+
+	skill := percentile * confidence
 
 	resp.IsEligible = true
 	resp.AverageScore = avg
+	resp.Percentile = percentile
+	resp.Confidence = confidence
 	resp.Skill = skill
+	resp.Rank = record.Rank
 	return skill, resp, nil
 }

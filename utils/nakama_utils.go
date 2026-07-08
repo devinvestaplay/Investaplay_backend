@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"game-server/systems/shared_constants"
@@ -134,6 +135,29 @@ func ReadUserStorageObject(ctx context.Context, nk runtime.NakamaModule, userID,
 		return "", nil
 	}
 	return records[0].Value, nil
+}
+
+// ComputePercentile calculates percentile using the formula: (L + 0.5 × E) / N × 100
+// L = players with score below, E = players with equal score, N = total eligible players
+func ComputePercentile(ctx context.Context, db *sql.DB, leaderboardID string, score int64) float64 {
+	var L, E, N int64
+
+	db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM leaderboard_record WHERE leaderboard_id = $1 AND score < $2",
+		leaderboardID, score).Scan(&L)
+
+	db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM leaderboard_record WHERE leaderboard_id = $1 AND score = $2",
+		leaderboardID, score).Scan(&E)
+
+	db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM leaderboard_record WHERE leaderboard_id = $1",
+		leaderboardID).Scan(&N)
+
+	if N == 0 {
+		return 0
+	}
+	return (float64(L) + 0.5*float64(E)) / float64(N)
 }
 
 func WriteUserStorageObject(ctx context.Context, nk runtime.NakamaModule, userID, collection, key, value string) error {
