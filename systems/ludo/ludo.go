@@ -21,6 +21,10 @@ const (
 	rpcIdLudoMatchStart        = "ludo_match_start"
 	rpcIdLudoMatchFinish       = "ludo_match_finish"
 	rpcIdLudoGetSkill          = "ludo_get_skill"
+	rpcIdLudoRoomCreate        = "ludo_room_create"
+	rpcIdLudoRoomJoin          = "ludo_room_join"
+	rpcIdLudoRoomGet           = "ludo_room_get"
+	rpcIdLudoRoomLeave         = "ludo_room_leave"
 
 	ludoMinMatches    = 5
 	ludoTargetMatches = 30
@@ -30,6 +34,12 @@ const (
 )
 
 func InitLudo(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaModule, initializer *runtime.Initializer) error {
+
+	if err := (*initializer).RegisterMatch(ludoCustomRoomMatchModule, func(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule) (runtime.Match, error) {
+		return &LudoCustomRoomMatch{}, nil
+	}); err != nil {
+		return err
+	}
 
 	if err := (*initializer).RegisterRpc(rpcIdLudoMatchCheckBalance, ludoMatchCheckBalance); err != nil {
 		return err
@@ -41,6 +51,18 @@ func InitLudo(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaMo
 		return err
 	}
 	if err := (*initializer).RegisterRpc(rpcIdLudoGetSkill, ludoGetSkill); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdLudoRoomCreate, ludoRoomCreate); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdLudoRoomJoin, ludoRoomJoin); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdLudoRoomGet, ludoRoomGet); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdLudoRoomLeave, ludoRoomLeave); err != nil {
 		return err
 	}
 
@@ -115,7 +137,11 @@ func ludoMatchStart(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 
 	// ----------------------------- Arena -----------------------------
 
-	matchArena := arena.LudoArena.Arenas[ludoStart.ArenaName]
+	matchArena, ok := arena.LudoArena.Arenas[ludoStart.ArenaName]
+	if !ok {
+		err := errors.New("arena not found")
+		return utils.CreateStatus(false, http.StatusNotFound, err.Error()), err
+	}
 
 	feeAmount := matchArena.FeeCurrencyData.Amount
 
