@@ -20,7 +20,8 @@ import (
 const (
 	ludoCustomRoomMatchModule = "ludo_custom_room"
 	ludoRoomStorageKeyPrefix  = "custom_room_"
-	ludoRoomCodeLength        = 6
+	ludoRoomCodeLength          = 6
+	ludoCustomRoomMatchTickRate = 10
 
 	ludoRoomStatusOpen    = "open"
 	ludoRoomStatusFull    = "full"
@@ -426,7 +427,7 @@ func (m *LudoCustomRoomMatch) MatchInit(ctx context.Context, logger runtime.Logg
 		Presences:  map[string]runtime.Presence{},
 	}
 	label, _ := utils.SerializeObjectToString(state)
-	return state, 1, label
+	return state, ludoCustomRoomMatchTickRate, label
 }
 
 func (m *LudoCustomRoomMatch) MatchJoinAttempt(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presence runtime.Presence, metadata map[string]string) (interface{}, bool, string) {
