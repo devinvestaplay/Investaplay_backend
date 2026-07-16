@@ -22,9 +22,15 @@ const (
 	ludoRoomStorageKeyPrefix  = "custom_room_"
 	ludoRoomCodeLength        = 6
 
-	ludoRoomStatusOpen   = "open"
-	ludoRoomStatusFull   = "full"
-	ludoRoomStatusClosed = "closed"
+	ludoRoomStatusOpen    = "open"
+	ludoRoomStatusFull    = "full"
+	ludoRoomStatusClosed  = "closed"
+	ludoRoomStatusPlaying = "playing"
+
+	ludoCustomRoomStatusWaiting = "waiting_for_players"
+	ludoCustomRoomStatusPlaying = "playing"
+	ludoCustomRoomSignalStart   = "start"
+	ludoCustomRoomStartOpCode   = 200
 )
 
 type LudoRoomCreateRequest struct {
@@ -193,6 +199,9 @@ func ludoRoomJoin(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 			return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
 		}
 		return respJson, nil
+	}
+	if room.Status == ludoRoomStatusPlaying {
+		return utils.CreateStatus(false, http.StatusConflict, "room already started"), nil
 	}
 	if len(room.Players) >= room.MaxPlayers {
 		return utils.CreateStatus(false, http.StatusConflict, "room is full"), nil
@@ -397,11 +406,13 @@ func ludoRoomToResponse(room LudoRoomData) LudoRoomResponse {
 type LudoCustomRoomMatch struct{}
 
 type LudoCustomRoomMatchState struct {
-	RoomCode   string          `json:"room_code"`
-	ArenaName  string          `json:"arena_name"`
-	Mode       arena.ArenaMode `json:"mode"`
-	HostID     string          `json:"host_id"`
-	MaxPlayers int             `json:"max_players"`
+	RoomCode   string                      `json:"room_code"`
+	ArenaName  string                      `json:"arena_name"`
+	Mode       arena.ArenaMode             `json:"mode"`
+	HostID     string                      `json:"host_id"`
+	MaxPlayers int                         `json:"max_players"`
+	Status     string                      `json:"status"`
+	Presences  map[string]runtime.Presence `json:"-"`
 }
 
 func (m *LudoCustomRoomMatch) MatchInit(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, params map[string]interface{}) (interface{}, int, string) {
@@ -411,6 +422,8 @@ func (m *LudoCustomRoomMatch) MatchInit(ctx context.Context, logger runtime.Logg
 		Mode:       arena.ArenaMode(fmt.Sprint(params["mode"])),
 		HostID:     fmt.Sprint(params["host_id"]),
 		MaxPlayers: intFromParam(params["max_players"], 2),
+		Status:     ludoCustomRoomStatusWaiting,
+		Presences:  map[string]runtime.Presence{},
 	}
 	label, _ := utils.SerializeObjectToString(state)
 	return state, 1, label
@@ -435,15 +448,52 @@ func (m *LudoCustomRoomMatch) MatchJoinAttempt(ctx context.Context, logger runti
 }
 
 func (m *LudoCustomRoomMatch) MatchJoin(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presences []runtime.Presence) interface{} {
-	return state
+	matchState, ok := state.(*LudoCustomRoomMatchState)
+	if !ok {
+		return state
+	}
+	if matchState.Presences == nil {
+		matchState.Presences = map[string]runtime.Presence{}
+	}
+	for _, presence := range presences {
+		matchState.Presences[presence.GetSessionId()] = presence
+	}
+	return matchState
 }
 
 func (m *LudoCustomRoomMatch) MatchLeave(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presences []runtime.Presence) interface{} {
-	return state
+	matchState, ok := state.(*LudoCustomRoomMatchState)
+	if !ok {
+		return state
+	}
+	for _, presence := range presences {
+		delete(matchState.Presences, presence.GetSessionId())
+	}
+	return matchState
 }
 
 func (m *LudoCustomRoomMatch) MatchLoop(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, messages []runtime.MatchData) interface{} {
-	return state
+	matchState, ok := state.(*LudoCustomRoomMatchState)
+	if !ok {
+		return state
+	}
+	for _, message := range messages {
+		if matchState.Status != ludoCustomRoomStatusPlaying {
+			if message.GetOpCode() != ludoCustomRoomStartOpCode || message.GetUserId() != matchState.HostID {
+				continue
+			}
+			ludoCustomRoomMarkPlaying(ctx, logger, nk, dispatcher, matchState)
+		}
+
+		recipients := ludoCustomRoomRecipients(matchState, message.GetSessionId())
+		if len(recipients) == 0 {
+			continue
+		}
+		if err := dispatcher.BroadcastMessage(message.GetOpCode(), message.GetData(), recipients, message, message.GetReliable()); err != nil {
+			logger.Error("failed to relay ludo custom room message op %d: %v", message.GetOpCode(), err)
+		}
+	}
+	return matchState
 }
 
 func (m *LudoCustomRoomMatch) MatchTerminate(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, graceSeconds int) interface{} {
@@ -451,7 +501,53 @@ func (m *LudoCustomRoomMatch) MatchTerminate(ctx context.Context, logger runtime
 }
 
 func (m *LudoCustomRoomMatch) MatchSignal(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, data string) (interface{}, string) {
-	return state, ""
+	matchState, ok := state.(*LudoCustomRoomMatchState)
+	if !ok {
+		return state, ""
+	}
+	if data != ludoCustomRoomSignalStart {
+		return matchState, ""
+	}
+	if matchState.Status == ludoCustomRoomStatusPlaying {
+		return matchState, ""
+	}
+
+	ludoCustomRoomMarkPlaying(ctx, logger, nk, dispatcher, matchState)
+	presences := ludoCustomRoomRecipients(matchState, "")
+	if len(presences) > 0 {
+		if err := dispatcher.BroadcastMessage(ludoCustomRoomStartOpCode, []byte(""), presences, nil, true); err != nil {
+			logger.Error("failed to broadcast ludo custom room start: %v", err)
+		}
+	}
+	return matchState, ""
+}
+
+func ludoCustomRoomMarkPlaying(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, state *LudoCustomRoomMatchState) {
+	state.Status = ludoCustomRoomStatusPlaying
+	if room, version, err := readLudoRoom(ctx, nk, state.RoomCode); err != nil {
+		logger.Error("failed to read ludo custom room %s on start: %v", state.RoomCode, err)
+	} else {
+		room.Status = ludoRoomStatusPlaying
+		room.UpdatedAt = time.Now().Unix()
+		if err := writeLudoRoom(ctx, nk, room, version); err != nil {
+			logger.Error("failed to mark ludo custom room %s playing: %v", state.RoomCode, err)
+		}
+	}
+	label, _ := utils.SerializeObjectToString(state)
+	if err := dispatcher.MatchLabelUpdate(label); err != nil {
+		logger.Error("failed to update ludo custom room match label: %v", err)
+	}
+}
+
+func ludoCustomRoomRecipients(state *LudoCustomRoomMatchState, excludeSessionID string) []runtime.Presence {
+	presences := make([]runtime.Presence, 0, len(state.Presences))
+	for sessionID, presence := range state.Presences {
+		if sessionID == excludeSessionID {
+			continue
+		}
+		presences = append(presences, presence)
+	}
+	return presences
 }
 
 func intFromParam(value interface{}, fallback int) int {

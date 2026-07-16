@@ -25,6 +25,7 @@ const (
 	rpcIdLudoRoomJoin          = "ludo_room_join"
 	rpcIdLudoRoomGet           = "ludo_room_get"
 	rpcIdLudoRoomLeave         = "ludo_room_leave"
+	rpcIdLudoCreateBotMatch    = "ludo_create_bot_match"
 
 	ludoMinMatches    = 5
 	ludoTargetMatches = 30
@@ -37,6 +38,12 @@ func InitLudo(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaMo
 
 	if err := (*initializer).RegisterMatch(ludoCustomRoomMatchModule, func(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule) (runtime.Match, error) {
 		return &LudoCustomRoomMatch{}, nil
+	}); err != nil {
+		return err
+	}
+
+	if err := (*initializer).RegisterMatch(ludoBotMatchModule, func(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule) (runtime.Match, error) {
+		return &LudoBotMatch{}, nil
 	}); err != nil {
 		return err
 	}
@@ -63,6 +70,10 @@ func InitLudo(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaMo
 		return err
 	}
 	if err := (*initializer).RegisterRpc(rpcIdLudoRoomLeave, ludoRoomLeave); err != nil {
+		return err
+	}
+
+	if err := (*initializer).RegisterRpc(rpcIdLudoCreateBotMatch, ludoCreateBotMatch); err != nil {
 		return err
 	}
 
@@ -143,6 +154,28 @@ func ludoMatchStart(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		return utils.CreateStatus(false, http.StatusNotFound, err.Error()), err
 	}
 
+	var startMatchID string
+	if isLudoCustomRoomMode(matchArena.Mode) && ludoStart.RoomCode != "" {
+		room, _, err := readLudoRoom(ctx, nk, ludoStart.RoomCode)
+		if err != nil {
+			return utils.CreateStatus(false, http.StatusNotFound, err.Error()), err
+		}
+		if room.ArenaName != ludoStart.ArenaName {
+			return utils.CreateStatus(false, http.StatusBadRequest, "room arena does not match request"), nil
+		}
+		if ludoStart.MatchID != "" && ludoStart.MatchID != room.MatchID {
+			return utils.CreateStatus(false, http.StatusBadRequest, "match_id does not match room"), nil
+		}
+		if _, exists := room.Players[userID]; !exists {
+			return utils.CreateStatus(false, http.StatusForbidden, "user is not in this room"), nil
+		}
+		if room.HostID == userID {
+			startMatchID = room.MatchID
+		}
+	} else if isLudoCustomRoomMode(matchArena.Mode) && ludoStart.MatchID != "" {
+		startMatchID = ludoStart.MatchID
+	}
+
 	feeAmount := matchArena.FeeCurrencyData.Amount
 
 	// ----------------------------- Wallet -----------------------------
@@ -182,6 +215,13 @@ func ludoMatchStart(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	}
 
 	logger.Info("Wallet updated for user %s: %+v", userID, updated)
+
+	if startMatchID != "" {
+		if _, err := nk.MatchSignal(ctx, startMatchID, ludoCustomRoomSignalStart); err != nil {
+			logger.Error("failed to signal ludo custom room match %s start: %v", startMatchID, err)
+			return utils.CreateStatus(false, http.StatusConflict, err.Error()), err
+		}
+	}
 
 	// ----------------------------- Response -----------------------------
 
@@ -294,6 +334,8 @@ func ludoMatchFinish(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 
 type LudoMatchStartData struct {
 	ArenaName string `json:"arena_name"`
+	RoomCode  string `json:"room_code,omitempty"`
+	MatchID   string `json:"match_id,omitempty"`
 }
 
 type LudoPlayerResult struct {
