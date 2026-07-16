@@ -485,11 +485,11 @@ func (m *LudoCustomRoomMatch) MatchLoop(ctx context.Context, logger runtime.Logg
 			ludoCustomRoomMarkPlaying(ctx, logger, nk, dispatcher, matchState)
 		}
 
-		recipients := ludoCustomRoomRecipients(matchState, message.GetSessionId())
+		recipients := ludoCustomRoomRecipients(matchState, "")
 		if len(recipients) == 0 {
 			continue
 		}
-		if err := dispatcher.BroadcastMessage(message.GetOpCode(), message.GetData(), recipients, message, message.GetReliable()); err != nil {
+		if err := dispatcher.BroadcastMessage(message.GetOpCode(), message.GetData(), recipients, message, true); err != nil {
 			logger.Error("failed to relay ludo custom room message op %d: %v", message.GetOpCode(), err)
 		}
 	}
