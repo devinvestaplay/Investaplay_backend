@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"game-server/systems/arena"
 	"game-server/systems/shared_constants"
 	"game-server/utils"
 	"strings"
 
+	"github.com/heroiclabs/nakama-common/api"
 	"github.com/heroiclabs/nakama-common/runtime"
 )
 
@@ -69,55 +71,298 @@ type ludoMatchFinishedPayload struct {
 }
 
 func ludoCreateBotMatch(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, err := ludoAuthenticatedUserID(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := parseLudoBotMatchCreateRequest(payload)
+	if err != nil {
+		return "", err
+	}
+
+	options, err := newLudoBotMatchCreateOptions(userID, req)
+	if err != nil {
+		return "", err
+	}
+
+	result, err := createOrGetLudoBotMatch(ctx, logger, nk, options)
+	if err != nil {
+		return "", err
+	}
+
+	return serializeLudoBotResponse(newLudoBotMatchCreateResponse(result))
+}
+
+func ludoOnlineBotMatchCreate(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, err := ludoAuthenticatedUserID(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := parseLudoOnlineBotMatchCreateRequest(payload)
+	if err != nil {
+		return "", err
+	}
+
+	options, matchArena, err := newLudoOnlineBotMatchCreateOptions(userID, req)
+	if err != nil {
+		return "", err
+	}
+
+	result, err := createOrGetLudoBotMatch(ctx, logger, nk, options)
+	if err != nil {
+		return "", err
+	}
+
+	matchState, err := readLudoBotMatchState(ctx, nk, result.MatchID)
+	if err != nil {
+		logger.Error("failed to read ludo online bot match state %s: %v", result.MatchID, err)
+		return "", runtime.NewError("failed to read bot match state", 13)
+	}
+
+	players, err := ludoOnlineBotMatchPlayers(ctx, nk, userID, matchState)
+	if err != nil {
+		logger.Error("failed to build ludo online bot players for match %s: %v", result.MatchID, err)
+		return "", runtime.NewError("failed to build bot match players", 13)
+	}
+
+	resp := LudoOnlineBotMatchCreateResponse{
+		Success:          true,
+		MatchID:          result.MatchID,
+		ArenaName:        req.ArenaName,
+		EntryFeeRequired: matchArena.FeeCurrencyData.Amount > 0,
+		EntryFeeAmount:   matchArena.FeeCurrencyData.Amount,
+		Players:          players,
+	}
+	return serializeLudoOnlineBotResponse(resp)
+}
+
+func parseLudoOnlineBotMatchCreateRequest(payload string) (LudoOnlineBotMatchCreateRequest, error) {
+	var req LudoOnlineBotMatchCreateRequest
+	if err := utils.DeserializeObjectFromStringByRefs(&payload, &req); err != nil {
+		return LudoOnlineBotMatchCreateRequest{}, runtime.NewError("invalid ludo_online_bot_match_create payload", 3)
+	}
+	req.ArenaName = strings.TrimSpace(req.ArenaName)
+	req.Difficulty = strings.TrimSpace(req.Difficulty)
+	req.RequestID = strings.TrimSpace(req.RequestID)
+	return req, nil
+}
+
+func newLudoOnlineBotMatchCreateOptions(userID string, req LudoOnlineBotMatchCreateRequest) (ludoBotMatchCreateOptions, arena.LudoArenaItemData, error) {
+	matchArena, ok := arena.LudoArena.Arenas[req.ArenaName]
+	if !ok {
+		return ludoBotMatchCreateOptions{}, arena.LudoArenaItemData{}, runtime.NewError("arena not found", 5)
+	}
+	if !matchArena.Enabled {
+		return ludoBotMatchCreateOptions{}, arena.LudoArenaItemData{}, runtime.NewError("arena disabled", 7)
+	}
+
+	mode, err := ludoBotModeForOnlineArena(matchArena.Mode, req.PlayerCount)
+	if err != nil {
+		return ludoBotMatchCreateOptions{}, arena.LudoArenaItemData{}, err
+	}
+
+	difficulty := BotDifficulty(req.Difficulty)
+	if difficulty == "" {
+		difficulty = BotMedium
+	}
+	if !isSupportedBotDifficulty(difficulty) {
+		return ludoBotMatchCreateOptions{}, arena.LudoArenaItemData{}, runtime.NewError("unsupported bot difficulty", 3)
+	}
+	if req.RequestID == "" {
+		return ludoBotMatchCreateOptions{}, arena.LudoArenaItemData{}, runtime.NewError("request_id is required", 3)
+	}
+
+	return ludoBotMatchCreateOptions{
+		HumanUserID: userID,
+		Mode:        mode,
+		Difficulty:  difficulty,
+		RequestID:   req.RequestID,
+		IncludeBot:  true,
+		StorageKey:  ludoOnlineBotRequestStorageKey(userID, req.ArenaName, req.PlayerCount, req.RequestID),
+		StorageRecord: ludoBotMatchRequestRecord{
+			Mode:        mode,
+			Difficulty:  string(difficulty),
+			ArenaName:   req.ArenaName,
+			PlayerCount: req.PlayerCount,
+		},
+	}, matchArena, nil
+}
+
+func ludoBotModeForOnlineArena(mode arena.ArenaMode, playerCount int) (string, error) {
+	switch playerCount {
+	case 2:
+		if mode != arena.Mode2POnline {
+			return "", runtime.NewError("arena is not a 2 player online arena", 3)
+		}
+		return "ludo_2p", nil
+	case 4:
+		if mode != arena.Mode4POnline {
+			return "", runtime.NewError("arena is not a 4 player online arena", 3)
+		}
+		return "ludo_4p", nil
+	default:
+		return "", runtime.NewError("player_count must be 2 or 4", 3)
+	}
+}
+
+func readLudoBotMatchState(ctx context.Context, nk runtime.NakamaModule, matchID string) (*LudoMatchState, error) {
+	payload, err := nk.MatchSignal(ctx, matchID, "state")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(payload) == "" {
+		return nil, fmt.Errorf("empty bot match state")
+	}
+	var state LudoMatchState
+	if err := utils.DeserializeObjectFromStringByRefs(&payload, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func ludoOnlineBotMatchPlayers(ctx context.Context, nk runtime.NakamaModule, humanUserID string, state *LudoMatchState) ([]LudoOnlineBotMatchPlayer, error) {
+	account, err := nk.AccountGetId(ctx, humanUserID)
+	if err != nil {
+		return nil, err
+	}
+
+	players := make([]LudoOnlineBotMatchPlayer, 0, len(state.PlayerOrder))
+	for _, playerID := range state.PlayerOrder {
+		player := state.Players[playerID]
+		if player == nil {
+			continue
+		}
+		players = append(players, ludoOnlineBotMatchPlayer(player, humanUserID, account))
+	}
+	return players, nil
+}
+
+func ludoOnlineBotMatchPlayer(player *LudoPlayer, humanUserID string, account *api.Account) LudoOnlineBotMatchPlayer {
+	userID := player.ID
+	displayName := player.Name
+	avatar := fmt.Sprint(player.AvatarID)
+
+	if !player.IsBot {
+		if strings.TrimSpace(player.UserID) != "" {
+			userID = player.UserID
+		} else {
+			userID = humanUserID
+		}
+		if account != nil && account.User != nil {
+			if strings.TrimSpace(account.User.DisplayName) != "" {
+				displayName = account.User.DisplayName
+			} else if strings.TrimSpace(account.User.Username) != "" {
+				displayName = account.User.Username
+			}
+			if strings.TrimSpace(account.User.AvatarUrl) != "" {
+				avatar = account.User.AvatarUrl
+			}
+		}
+	}
+
+	return LudoOnlineBotMatchPlayer{
+		UserID:      userID,
+		DisplayName: displayName,
+		Avatar:      avatar,
+		PlayerID:    ludoUnityPlayerIDForSeat(player.Seat),
+		Seat:        player.Seat,
+		Color:       player.Color,
+		IsBot:       player.IsBot,
+	}
+}
+func ludoAuthenticatedUserID(ctx context.Context) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok || strings.TrimSpace(userID) == "" {
 		return "", runtime.NewError("authenticated user required", 16)
 	}
+	return strings.TrimSpace(userID), nil
+}
 
+func parseLudoBotMatchCreateRequest(payload string) (LudoBotMatchCreateRequest, error) {
 	var req LudoBotMatchCreateRequest
 	if err := utils.DeserializeObjectFromStringByRefs(&payload, &req); err != nil {
-		return "", runtime.NewError("invalid ludo_create_bot_match payload", 3)
+		return LudoBotMatchCreateRequest{}, runtime.NewError("invalid ludo_create_bot_match payload", 3)
 	}
+	return req, nil
+}
+
+func newLudoBotMatchCreateOptions(userID string, req LudoBotMatchCreateRequest) (ludoBotMatchCreateOptions, error) {
 	req.Mode = strings.TrimSpace(req.Mode)
 	req.Difficulty = strings.TrimSpace(req.Difficulty)
 	req.RequestID = strings.TrimSpace(req.RequestID)
+
 	if !isSupportedLudoBotMode(req.Mode) {
-		return "", runtime.NewError("unsupported ludo bot mode", 3)
+		return ludoBotMatchCreateOptions{}, runtime.NewError("unsupported ludo bot mode", 3)
 	}
-	if !isSupportedBotDifficulty(BotDifficulty(req.Difficulty)) {
-		return "", runtime.NewError("unsupported bot difficulty", 3)
+	difficulty := BotDifficulty(req.Difficulty)
+	if !isSupportedBotDifficulty(difficulty) {
+		return ludoBotMatchCreateOptions{}, runtime.NewError("unsupported bot difficulty", 3)
 	}
 	if req.RequestID == "" {
-		return "", runtime.NewError("request_id is required", 3)
+		return ludoBotMatchCreateOptions{}, runtime.NewError("request_id is required", 3)
 	}
 
-	storageKey := ludoBotRequestStorageKey(userID, req.RequestID)
-	if record, found, err := readLudoBotRequestRecord(ctx, nk, storageKey); err != nil {
-		return "", runtime.NewError("failed to read bot match request", 13)
+	return ludoBotMatchCreateOptions{
+		HumanUserID: userID,
+		Mode:        req.Mode,
+		Difficulty:  difficulty,
+		RequestID:   req.RequestID,
+		IncludeBot:  true,
+		StorageKey:  ludoBotRequestStorageKey(userID, req.RequestID),
+		StorageRecord: ludoBotMatchRequestRecord{
+			Mode:       req.Mode,
+			Difficulty: req.Difficulty,
+		},
+	}, nil
+}
+
+func createOrGetLudoBotMatch(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, options ludoBotMatchCreateOptions) (ludoBotMatchCreateResult, error) {
+	if record, found, err := readLudoBotRequestRecord(ctx, nk, options.StorageKey); err != nil {
+		return ludoBotMatchCreateResult{}, runtime.NewError("failed to read bot match request", 13)
 	} else if found {
-		return serializeLudoBotResponse(LudoBotMatchCreateResponse{Success: true, MatchID: record.MatchID, HasBot: true, Mode: record.Mode})
+		return ludoBotMatchCreateResult{MatchID: record.MatchID, Mode: record.Mode, Difficulty: record.Difficulty}, nil
 	}
 
-	matchID, err := nk.MatchCreate(ctx, ludoBotMatchModule, map[string]interface{}{
-		"mode":           req.Mode,
-		"human_user_id":  userID,
-		"include_bot":    true,
-		"bot_difficulty": req.Difficulty,
-		"request_id":     req.RequestID,
-	})
+	matchID, err := createLudoBotMatch(ctx, nk, options)
 	if err != nil {
-		logger.Error("failed to create ludo bot match for user %s: %v", userID, err)
-		return "", runtime.NewError("match creation failed", 13)
+		logger.Error("failed to create ludo bot match for user %s: %v", options.HumanUserID, err)
+		return ludoBotMatchCreateResult{}, runtime.NewError("match creation failed", 13)
 	}
 
-	record := ludoBotMatchRequestRecord{MatchID: matchID, Mode: req.Mode, Difficulty: req.Difficulty}
-	if err := writeLudoBotRequestRecord(ctx, nk, storageKey, record); err != nil {
-		logger.Error("failed to store ludo bot request %s for user %s: %v", req.RequestID, userID, err)
+	record := options.StorageRecord
+	record.MatchID = matchID
+	if err := writeLudoBotRequestRecord(ctx, nk, options.StorageKey, record); err != nil {
+		logger.Error("failed to store ludo bot request %s for user %s: %v", options.RequestID, options.HumanUserID, err)
 	}
-	return serializeLudoBotResponse(LudoBotMatchCreateResponse{Success: true, MatchID: matchID, HasBot: true, Mode: req.Mode})
+
+	return ludoBotMatchCreateResult{MatchID: matchID, Mode: options.Mode, Difficulty: string(options.Difficulty)}, nil
+}
+
+func createLudoBotMatch(ctx context.Context, nk runtime.NakamaModule, options ludoBotMatchCreateOptions) (string, error) {
+	return nk.MatchCreate(ctx, ludoBotMatchModule, ludoBotMatchCreateParams(options))
+}
+
+func ludoBotMatchCreateParams(options ludoBotMatchCreateOptions) map[string]interface{} {
+	return map[string]interface{}{
+		"mode":           options.Mode,
+		"human_user_id":  options.HumanUserID,
+		"include_bot":    options.IncludeBot,
+		"bot_difficulty": string(options.Difficulty),
+		"request_id":     options.RequestID,
+	}
+}
+
+func newLudoBotMatchCreateResponse(result ludoBotMatchCreateResult) LudoBotMatchCreateResponse {
+	return LudoBotMatchCreateResponse{Success: true, MatchID: result.MatchID, HasBot: true, Mode: result.Mode}
 }
 
 func serializeLudoBotResponse(resp LudoBotMatchCreateResponse) (string, error) {
+	return utils.SerializeObjectToString(&resp)
+}
+
+func serializeLudoOnlineBotResponse(resp LudoOnlineBotMatchCreateResponse) (string, error) {
 	return utils.SerializeObjectToString(&resp)
 }
 
@@ -159,6 +404,25 @@ func ludoBotPlayerCount(mode string) int {
 
 func ludoBotRequestStorageKey(userID string, requestID string) string {
 	return ludoBotMatchRequestStorageKey + sanitizeLudoBotIDPart(userID) + "_" + sanitizeLudoBotIDPart(requestID)
+}
+
+func ludoOnlineBotRequestStorageKey(userID string, arenaName string, playerCount int, requestID string) string {
+	return ludoOnlineBotMatchRequestStorageKey + sanitizeLudoBotIDPart(userID) + "_" + sanitizeLudoBotIDPart(arenaName) + "_" + fmt.Sprint(playerCount) + "_" + sanitizeLudoBotIDPart(requestID)
+}
+
+func ludoUnityPlayerIDForSeat(seat int) int {
+	switch seat {
+	case 0:
+		return 0
+	case 1:
+		return 2
+	case 2:
+		return 1
+	case 3:
+		return 3
+	default:
+		return seat
+	}
 }
 
 func sanitizeLudoBotIDPart(value string) string {

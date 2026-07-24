@@ -12,25 +12,45 @@ import (
 type LudoBotMatch struct{}
 
 func (m *LudoBotMatch) MatchInit(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, params map[string]interface{}) (interface{}, int, string) {
+	config := newLudoBotMatchConfig(ctx, params)
+	state := newLudoBotMatchState(config)
+	return state, ludoBotMatchTickRate, ludoBotMatchLabel(state)
+}
+
+func newLudoBotMatchConfig(ctx context.Context, params map[string]interface{}) ludoBotMatchConfig {
 	mode := stringFromParam(params["mode"])
-	difficulty := BotDifficulty(stringFromParam(params["bot_difficulty"]))
 	if !isSupportedLudoBotMode(mode) {
 		mode = "ludo_2p"
 	}
+
+	difficulty := BotDifficulty(stringFromParam(params["bot_difficulty"]))
 	if !isSupportedBotDifficulty(difficulty) {
 		difficulty = BotMedium
 	}
+
 	matchID := stringFromContext(ctx, runtime.RUNTIME_CTX_MATCH_ID)
 	if matchID == "" {
 		matchID = stringFromParam(params["request_id"])
 	}
+
+	return ludoBotMatchConfig{
+		MatchID:       matchID,
+		Mode:          mode,
+		HumanUserID:   stringFromParam(params["human_user_id"]),
+		IncludeBot:    boolFromParam(params["include_bot"]),
+		BotDifficulty: difficulty,
+		RequestID:     stringFromParam(params["request_id"]),
+	}
+}
+
+func newLudoBotMatchState(config ludoBotMatchConfig) *LudoMatchState {
 	state := &LudoMatchState{
-		MatchID:          matchID,
-		Mode:             mode,
-		HumanUserID:      stringFromParam(params["human_user_id"]),
-		IncludeBot:       boolFromParam(params["include_bot"]),
-		BotDifficulty:    difficulty,
-		RequestID:        stringFromParam(params["request_id"]),
+		MatchID:          config.MatchID,
+		Mode:             config.Mode,
+		HumanUserID:      config.HumanUserID,
+		IncludeBot:       config.IncludeBot,
+		BotDifficulty:    config.BotDifficulty,
+		RequestID:        config.RequestID,
 		Phase:            PhaseWaitingForHuman,
 		Players:          map[string]*LudoPlayer{},
 		PlayerOrder:      []string{},
@@ -38,18 +58,14 @@ func (m *LudoBotMatch) MatchInit(ctx context.Context, logger runtime.Logger, db 
 		ConsecutiveSixes: map[string]int{},
 		Presences:        map[string]runtime.Presence{},
 	}
-	colors := []string{"red", "yellow", "green", "blue"}
-	human := newLudoHumanPlayer(state.HumanUserID, 0, colors[0])
-	state.Players[human.ID] = human
-	state.PlayerOrder = append(state.PlayerOrder, human.ID)
-	for seat := 1; seat < ludoBotPlayerCount(mode); seat++ {
-		bot := newLudoBotPlayer(state.MatchID, seat, colors[seat], difficulty)
-		state.Players[bot.ID] = bot
-		state.PlayerOrder = append(state.PlayerOrder, bot.ID)
-	}
+	populateLudoBotMatchPlayers(state, config)
 	state.CurrentPlayerID = state.PlayerOrder[0]
+	return state
+}
+
+func ludoBotMatchLabel(state *LudoMatchState) string {
 	label, _ := utils.SerializeObjectToString(&map[string]interface{}{"mode": state.Mode, "include_bot": true, "has_bot": true})
-	return state, ludoBotMatchTickRate, label
+	return label
 }
 
 func (m *LudoBotMatch) MatchJoinAttempt(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presence runtime.Presence, metadata map[string]string) (interface{}, bool, string) {
@@ -181,6 +197,3 @@ func processBotTurn(dispatcher runtime.MatchDispatcher, state *LudoMatchState, t
 		applyMoveAndAdvance(dispatcher, state, move)
 	}
 }
-
-
-

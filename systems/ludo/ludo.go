@@ -25,7 +25,8 @@ const (
 	rpcIdLudoRoomJoin          = "ludo_room_join"
 	rpcIdLudoRoomGet           = "ludo_room_get"
 	rpcIdLudoRoomLeave         = "ludo_room_leave"
-	rpcIdLudoCreateBotMatch    = "ludo_create_bot_match"
+	rpcIdLudoCreateBotMatch       = "ludo_create_bot_match"
+	rpcIdLudoOnlineBotMatchCreate = "ludo_online_bot_match_create"
 
 	ludoMinMatches    = 5
 	ludoTargetMatches = 30
@@ -74,6 +75,9 @@ func InitLudo(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaMo
 	}
 
 	if err := (*initializer).RegisterRpc(rpcIdLudoCreateBotMatch, ludoCreateBotMatch); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdLudoOnlineBotMatchCreate, ludoOnlineBotMatchCreate); err != nil {
 		return err
 	}
 

@@ -20,6 +20,29 @@ func newLudoBotPlayer(matchID string, seat int, color string, difficulty BotDiff
 	return &LudoPlayer{ID: id, Name: template.Name, AvatarID: template.AvatarID, Level: randomBotLevel(ludoBotDefaultHumanLevel), Country: template.Country, Seat: seat, Color: color, IsBot: true, BotDifficulty: difficulty, Tokens: newLudoTokens()}
 }
 
+func populateLudoBotMatchPlayers(state *LudoMatchState, config ludoBotMatchConfig) {
+	human := newLudoHumanPlayer(config.HumanUserID, 0, ludoBotPlayerColor(0))
+	addLudoPlayerToState(state, human)
+
+	for seat := 1; seat < ludoBotPlayerCount(config.Mode); seat++ {
+		bot := newLudoBotPlayer(config.MatchID, seat, ludoBotPlayerColor(seat), config.BotDifficulty)
+		addLudoPlayerToState(state, bot)
+	}
+}
+
+func addLudoPlayerToState(state *LudoMatchState, player *LudoPlayer) {
+	state.Players[player.ID] = player
+	state.PlayerOrder = append(state.PlayerOrder, player.ID)
+}
+
+func ludoBotPlayerColor(seat int) string {
+	colors := []string{"red", "yellow", "green", "blue"}
+	if seat < 0 || seat >= len(colors) {
+		return colors[0]
+	}
+	return colors[seat]
+}
+
 func newLudoTokens() []LudoToken {
 	tokens := make([]LudoToken, 0, ludoBotTokensPerPlayer)
 	for i := 0; i < ludoBotTokensPerPlayer; i++ {

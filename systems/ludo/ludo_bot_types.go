@@ -4,7 +4,8 @@ import "github.com/heroiclabs/nakama-common/runtime"
 
 const (
 	ludoBotMatchModule             = "ludo_bot_match"
-	ludoBotMatchRequestStorageKey  = "bot_match_request_"
+	ludoBotMatchRequestStorageKey       = "bot_match_request_"
+	ludoOnlineBotMatchRequestStorageKey = "online_bot_match_request_"
 	ludoBotMatchTickRate           = 10
 	ludoBotTokensPerPlayer         = 4
 	ludoBotHomePosition            = 57
@@ -39,6 +40,31 @@ const (
 	PhaseGameFinished    = "game_finished"
 )
 
+type ludoBotMatchCreateOptions struct {
+	HumanUserID   string
+	Mode          string
+	Difficulty    BotDifficulty
+	RequestID     string
+	IncludeBot    bool
+	StorageKey    string
+	StorageRecord ludoBotMatchRequestRecord
+}
+
+type ludoBotMatchCreateResult struct {
+	MatchID    string
+	Mode       string
+	Difficulty string
+}
+
+type ludoBotMatchConfig struct {
+	MatchID       string
+	Mode          string
+	HumanUserID   string
+	IncludeBot    bool
+	BotDifficulty BotDifficulty
+	RequestID     string
+}
+
 type LudoBotMatchCreateRequest struct {
 	Mode       string `json:"mode"`
 	Difficulty string `json:"difficulty"`
@@ -52,10 +78,38 @@ type LudoBotMatchCreateResponse struct {
 	Mode    string `json:"mode"`
 }
 
+type LudoOnlineBotMatchCreateRequest struct {
+	ArenaName   string `json:"arena_name"`
+	PlayerCount int    `json:"player_count"`
+	Difficulty  string `json:"difficulty"`
+	RequestID   string `json:"request_id"`
+}
+
+type LudoOnlineBotMatchCreateResponse struct {
+	Success          bool                        `json:"success"`
+	MatchID          string                      `json:"match_id"`
+	ArenaName        string                      `json:"arena_name,omitempty"`
+	EntryFeeRequired bool                        `json:"entry_fee_required"`
+	EntryFeeAmount   int                         `json:"entry_fee_amount"`
+	Players          []LudoOnlineBotMatchPlayer `json:"players"`
+}
+
+type LudoOnlineBotMatchPlayer struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Avatar      string `json:"avatar"`
+	PlayerID    int    `json:"player_id"`
+	Seat        int    `json:"seat"`
+	Color       string `json:"color"`
+	IsBot       bool   `json:"is_bot"`
+}
+
 type ludoBotMatchRequestRecord struct {
-	MatchID    string `json:"match_id"`
-	Mode       string `json:"mode"`
-	Difficulty string `json:"difficulty"`
+	MatchID     string `json:"match_id"`
+	Mode        string `json:"mode"`
+	Difficulty  string `json:"difficulty"`
+	ArenaName   string `json:"arena_name,omitempty"`
+	PlayerCount int    `json:"player_count,omitempty"`
 }
 
 type LudoToken struct {
@@ -123,4 +177,3 @@ type LudoMatchState struct {
 	ConsecutiveSixes map[string]int             `json:"consecutive_sixes"`
 	Presences        map[string]runtime.Presence `json:"-"`
 }
-
