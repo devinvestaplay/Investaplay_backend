@@ -357,8 +357,21 @@ func getQuestionsByCategory(ctx context.Context, logger runtime.Logger, db *sql.
 		return utils.CreateStatus(false, http.StatusNotFound, "Category not found or no questions"), nil
 	}
 
+	// ----------------------------- Limit to 20 Questions -----------------------------
+	limitedQuestions := Questions{
+		Questions: make(map[string]QuestionData),
+	}
+	count := 0
+	for questionID, questionData := range qs.Questions {
+		if count >= 20 {
+			break
+		}
+		limitedQuestions.Questions[questionID] = questionData
+		count++
+	}
+
 	// ----------------------------- Serialize -----------------------------
-	jsonStr, err := utils.SerializeObjectToString(&qs)
+	jsonStr, err := utils.SerializeObjectToString(&limitedQuestions)
 	if err != nil {
 		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
 	}

@@ -54,6 +54,7 @@ type ludoBotMatchCreateResult struct {
 	MatchID    string
 	Mode       string
 	Difficulty string
+
 }
 
 type ludoBotMatchConfig struct {

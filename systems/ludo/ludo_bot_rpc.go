@@ -242,7 +242,7 @@ func ludoOnlineBotMatchPlayers(ctx context.Context, nk runtime.NakamaModule, hum
 func ludoOnlineBotMatchPlayer(player *LudoPlayer, humanUserID string, account *api.Account) LudoOnlineBotMatchPlayer {
 	userID := player.ID
 	displayName := player.Name
-	avatar := fmt.Sprint(player.AvatarID)
+	avatar := ludoAvatarAddressableKey(player.AvatarID)
 
 	if !player.IsBot {
 		if strings.TrimSpace(player.UserID) != "" {
@@ -257,7 +257,7 @@ func ludoOnlineBotMatchPlayer(player *LudoPlayer, humanUserID string, account *a
 				displayName = account.User.Username
 			}
 			if strings.TrimSpace(account.User.AvatarUrl) != "" {
-				avatar = account.User.AvatarUrl
+				avatar = ludoNormalizeAvatarAddressableKey(account.User.AvatarUrl)
 			}
 		}
 	}
@@ -423,6 +423,28 @@ func ludoUnityPlayerIDForSeat(seat int) int {
 	default:
 		return seat
 	}
+}
+
+func ludoAvatarAddressableKey(avatarID int) string {
+	if avatarID <= 0 {
+		avatarID = ludoBotDefaultAvatarID
+	}
+	return fmt.Sprintf("avatar_%d", avatarID)
+}
+
+func ludoNormalizeAvatarAddressableKey(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ludoAvatarAddressableKey(ludoBotDefaultAvatarID)
+	}
+	if strings.HasPrefix(value, "avatar_") {
+		return value
+	}
+	var avatarID int
+	if _, err := fmt.Sscanf(value, "%d", &avatarID); err == nil && avatarID > 0 {
+		return ludoAvatarAddressableKey(avatarID)
+	}
+	return value
 }
 
 func sanitizeLudoBotIDPart(value string) string {
