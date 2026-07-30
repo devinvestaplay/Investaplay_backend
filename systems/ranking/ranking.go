@@ -11,6 +11,7 @@ import (
 	"game-server/utils"
 	"net/http"
 
+	"github.com/heroiclabs/nakama-common/api"
 	"github.com/heroiclabs/nakama-common/runtime"
 )
 
@@ -29,18 +30,28 @@ func InitRanking(ctx *context.Context, logger *runtime.Logger, nk *runtime.Nakam
 }
 
 type GlobalSkillResponse struct {
-	GlobalScore     float64 `json:"global_score"`
-	PrimarySkill    float64 `json:"primary_skill"`
-	SecondarySkill  float64 `json:"secondary_skill"`
-	PrimaryGame     string  `json:"primary_game"`
-	SecondaryGame   string  `json:"secondary_game"`
-	LudoSkill       float64 `json:"ludo_skill"`
-	QuizSkill       float64 `json:"quiz_skill"`
-	SolitaireSkill  float64 `json:"solitaire_skill"`
-	LudoEligible    bool    `json:"ludo_eligible"`
-	QuizEligible    bool    `json:"quiz_eligible"`
-	SolitaireElig   bool    `json:"solitaire_eligible"`
-	Rank            int64   `json:"rank"`
+	GlobalScore    float64                       `json:"global_score"`
+	PrimarySkill   float64                       `json:"primary_skill"`
+	SecondarySkill float64                       `json:"secondary_skill"`
+	PrimaryGame    string                        `json:"primary_game"`
+	SecondaryGame  string                        `json:"secondary_game"`
+	LudoSkill      float64                       `json:"ludo_skill"`
+	QuizSkill      float64                       `json:"quiz_skill"`
+	SolitaireSkill float64                       `json:"solitaire_skill"`
+	LudoEligible   bool                          `json:"ludo_eligible"`
+	QuizEligible   bool                          `json:"quiz_eligible"`
+	SolitaireElig  bool                          `json:"solitaire_eligible"`
+	Rank           int64                         `json:"rank"`
+	TopUsers       []GlobalSkillLeaderboardUser `json:"top_users"`
+}
+
+type GlobalSkillLeaderboardUser struct {
+	UserID      string                 `json:"user_id"`
+	Username    string                 `json:"username,omitempty"`
+	Rank        int64                  `json:"rank"`
+	Score       int64                  `json:"score"`
+	GlobalScore float64                `json:"global_score"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func getGlobalSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -74,7 +85,7 @@ func getGlobalSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		SolitaireElig:  solResp.IsEligible,
 	}
 
-	// Rank per-game skills to find primary (best) and secondary (second best)
+	// Rank per-game skills to find primary (best) and secondary (second best).
 	type gameSkill struct {
 		name  string
 		score float64
@@ -86,7 +97,6 @@ func getGlobalSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		{"solitaire", solScore, solResp.IsEligible},
 	}
 
-	// Sort descending by score among eligible games
 	var eligible []gameSkill
 	for _, g := range games {
 		if g.elig {
@@ -104,8 +114,16 @@ func getGlobalSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	var primary, secondary float64
 	switch len(eligible) {
 	case 0:
-		// no eligible games — no global score yet
-		respJson, _ := utils.SerializeObjectToString(&resp)
+		// No eligible games yet, but still return the current global top 10.
+		topUsers, topErr := listTopGlobalSkillUsers(ctx, nk)
+		if topErr != nil {
+			logger.Error("failed to list global skill leaderboard: %v", topErr)
+		}
+		resp.TopUsers = topUsers
+		respJson, err := utils.SerializeObjectToString(&resp)
+		if err != nil {
+			return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+		}
 		return respJson, nil
 	case 1:
 		primary = eligible[0].score
@@ -122,7 +140,6 @@ func getGlobalSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	resp.SecondarySkill = secondary
 	resp.GlobalScore = globalPrimaryWeight*primary + globalSecondaryWeight*secondary
 
-	// Write to global skill leaderboard
 	record, lerr := nk.LeaderboardRecordWrite(ctx, leaderboard.LeaderboardSkillGlobalID, userID, "", int64(resp.GlobalScore*1_000_000), 0, nil, nil)
 	if lerr != nil {
 		logger.Error("failed to write global skill leaderboard for user %s: %v", userID, lerr)
@@ -130,9 +147,59 @@ func getGlobalSkill(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		resp.Rank = record.Rank
 	}
 
+	topUsers, topErr := listTopGlobalSkillUsers(ctx, nk)
+	if topErr != nil {
+		logger.Error("failed to list global skill leaderboard: %v", topErr)
+	} else {
+		resp.TopUsers = topUsers
+	}
+
 	respJson, err := utils.SerializeObjectToString(&resp)
 	if err != nil {
 		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
 	}
 	return respJson, nil
+}
+
+func listTopGlobalSkillUsers(ctx context.Context, nk runtime.NakamaModule) ([]GlobalSkillLeaderboardUser, error) {
+	records, _, _, _, err := nk.LeaderboardRecordsList(ctx, leaderboard.LeaderboardSkillGlobalID, nil, 10, "", 0)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := leaderboard.AddAccountMetadataToRecords(ctx, nk, records); err != nil {
+		return nil, err
+	}
+
+	return globalSkillLeaderboardUsersFromRecords(records), nil
+}
+
+func globalSkillLeaderboardUsersFromRecords(records []*api.LeaderboardRecord) []GlobalSkillLeaderboardUser {
+	users := make([]GlobalSkillLeaderboardUser, 0, len(records))
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+
+		user := GlobalSkillLeaderboardUser{
+			UserID:      record.GetOwnerId(),
+			Rank:        record.GetRank(),
+			Score:       record.GetScore(),
+			GlobalScore: float64(record.GetScore()) / 1_000_000,
+		}
+
+		if username := record.GetUsername(); username != nil {
+			user.Username = username.Value
+		}
+
+		if metadata := record.GetMetadata(); metadata != "" {
+			var metadataMap map[string]interface{}
+			if err := utils.DeserializeObjectFromStringByRefsToMap(&metadata, &metadataMap); err == nil {
+				user.Metadata = metadataMap
+			}
+		}
+
+		users = append(users, user)
+	}
+	return users
 }
