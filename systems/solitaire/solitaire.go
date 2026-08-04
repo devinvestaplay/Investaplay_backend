@@ -26,6 +26,7 @@ const (
 	rpcIdSolitaireAutoMove = "solitaire_game_auto_move"
 
 	rpcIdSolitaireFinish   = "solitaire_game_finish"
+	rpcIdSolitaireBestGet  = "solitaire_best_stats_get"
 	rpcIdSolitaireGetSkill = "solitaire_get_skill"
 
 	solitaireScoreHistoryCollection = "ScoreHistory"
@@ -97,11 +98,33 @@ func InitSolitaire(ctx *context.Context, logger *runtime.Logger, nk *runtime.Nak
 	if err := (*initializer).RegisterRpc(rpcIdSolitaireFinish, gameFinished); err != nil {
 		return err
 	}
+	if err := (*initializer).RegisterRpc(rpcIdSolitaireBestGet, getSolitaireBestStats); err != nil {
+		return err
+	}
 	if err := (*initializer).RegisterRpc(rpcIdSolitaireGetSkill, solitaireGetSkill); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func getSolitaireBestStats(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok || userID == "" {
+		return utils.CreateStatus(false, http.StatusUnauthorized, "invalid user"), nil
+	}
+
+	bestStats, err := readSolitaireBestStats(ctx, nk, userID)
+	if err != nil {
+		logger.Error("failed to read Solitaire best stats for user %s: %v", userID, err)
+		return utils.CreateStatus(false, http.StatusInternalServerError, "failed to load best stats"), err
+	}
+
+	responseJSON, err := utils.SerializeObjectToString(&bestStats)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+	}
+	return responseJSON, nil
 }
 
 func hint(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
