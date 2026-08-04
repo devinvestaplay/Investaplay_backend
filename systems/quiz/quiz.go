@@ -11,6 +11,7 @@ import (
 	"game-server/utils"
 	"math"
 	"net/http"
+	"strings"
 
 	"github.com/heroiclabs/nakama-common/runtime"
 )
@@ -29,6 +30,7 @@ const (
 
 	// Question
 	rpcIdGetQuestionsByCategory     = "quiz_question_get_by_category"
+	rpcIdMarkQuestionAnswered       = "quiz_question_answered"
 	rpcIdAddQuestionToCategory      = "quiz_question_add_to_category"
 	rpcIdRemoveQuestionFromCategory = "quiz_question_remove_from_category"
 
@@ -47,8 +49,9 @@ const (
 	quizMinAttempts            = 20
 	quizTargetAttempts         = 60
 
-	QuizCollectionName = "Quiz" // parent of all categories
-	QuizCategoriesKey  = "quiz_categories"
+	QuizCollectionName       = "Quiz" // parent of all categories
+	QuizCategoriesKey        = "quiz_categories"
+	quizAnsweredCollection   = "QuizAnsweredQuestions"
 	// all categories have a storage object
 )
 
@@ -117,6 +120,9 @@ func InitQuiz(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaMo
 	// ----------------------------------------------------------------------------------------------------
 
 	if err := (*initializer).RegisterRpc(rpcIdGetQuestionsByCategory, getQuestionsByCategory); err != nil {
+		return err
+	}
+	if err := (*initializer).RegisterRpc(rpcIdMarkQuestionAnswered, markQuestionAnswered); err != nil {
 		return err
 	}
 	if err := (*initializer).RegisterRpc(rpcIdAddQuestionToCategory, addQuestionToCategory); err != nil {
@@ -344,6 +350,10 @@ func removeCategory(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 // -----------------------------------------------------------------------
 
 func getQuestionsByCategory(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok || userID == "" {
+		return utils.CreateStatus(false, http.StatusUnauthorized, "invalid user"), nil
+	}
 
 	// ----------------------------- Payload -----------------------------
 	var req CategoryIDRequestData
@@ -357,6 +367,12 @@ func getQuestionsByCategory(ctx context.Context, logger runtime.Logger, db *sql.
 		return utils.CreateStatus(false, http.StatusNotFound, "Category not found or no questions"), nil
 	}
 
+	answered, err := readAnsweredQuestions(ctx, nk, userID, req.CategoryID)
+	if err != nil {
+		logger.Error("failed to read answered quiz questions for user %s category %s: %v", userID, req.CategoryID, err)
+		return utils.CreateStatus(false, http.StatusInternalServerError, "failed to load question history"), err
+	}
+
 	// ----------------------------- Limit to 20 Questions -----------------------------
 	limitedQuestions := Questions{
 		Questions: make(map[string]QuestionData),
@@ -365,6 +381,9 @@ func getQuestionsByCategory(ctx context.Context, logger runtime.Logger, db *sql.
 	for questionID, questionData := range qs.Questions {
 		if count >= 20 {
 			break
+		}
+		if answered[questionID] || questionData.CategoryId != req.CategoryID || !isValidPlayableQuestion(questionID, questionData) {
+			continue
 		}
 		limitedQuestions.Questions[questionID] = questionData
 		count++
@@ -377,6 +396,118 @@ func getQuestionsByCategory(ctx context.Context, logger runtime.Logger, db *sql.
 	}
 
 	return jsonStr, nil
+}
+
+func markQuestionAnswered(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok || userID == "" {
+		return utils.CreateStatus(false, http.StatusUnauthorized, "invalid user"), nil
+	}
+
+	var req QuestionAnsweredRequestData
+	if err := utils.DeserializeObjectFromStringByRefs(&payload, &req); err != nil {
+		return utils.CreateStatus(false, http.StatusBadRequest, err.Error()), err
+	}
+
+	qs, exists := questionsOfCategory[req.CategoryID]
+	if !exists {
+		return utils.CreateStatus(false, http.StatusNotFound, "category not found"), nil
+	}
+	question, exists := qs.Questions[req.QuestionID]
+	if !exists || question.CategoryId != req.CategoryID || !isValidPlayableQuestion(req.QuestionID, question) {
+		return utils.CreateStatus(false, http.StatusNotFound, "question not found or inactive"), nil
+	}
+
+	if err := addAnsweredQuestion(ctx, nk, userID, req.CategoryID, req.QuestionID); err != nil {
+		logger.Error("failed to record answered quiz question for user %s category %s question %s: %v", userID, req.CategoryID, req.QuestionID, err)
+		return utils.CreateStatus(false, http.StatusInternalServerError, "failed to record answered question"), err
+	}
+
+	return utils.CreateStatus(true, http.StatusOK), nil
+}
+
+func isValidPlayableQuestion(questionID string, question QuestionData) bool {
+	if !question.IsActive || strings.TrimSpace(questionID) == "" || strings.TrimSpace(question.QuestionId) == "" || question.QuestionId != questionID {
+		return false
+	}
+	if strings.TrimSpace(question.CategoryId) == "" || strings.TrimSpace(question.QuestionText) == "" || question.CorrectOptionIndex < 0 || question.CorrectOptionIndex > 3 {
+		return false
+	}
+	options := []string{question.Option1, question.Option2, question.Option3, question.Option4}
+	return strings.TrimSpace(options[question.CorrectOptionIndex]) != ""
+}
+
+func readAnsweredQuestions(ctx context.Context, nk runtime.NakamaModule, userID, categoryID string) (map[string]bool, error) {
+	records, err := nk.StorageRead(ctx, []*runtime.StorageRead{{
+		Collection: quizAnsweredCollection,
+		Key:        categoryID,
+		UserID:     userID,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return make(map[string]bool), nil
+	}
+
+	var history AnsweredQuestionHistory
+	if err := json.Unmarshal([]byte(records[0].Value), &history); err != nil {
+		return nil, err
+	}
+	if history.Answered == nil {
+		history.Answered = make(map[string]bool)
+	}
+	return history.Answered, nil
+}
+
+func addAnsweredQuestion(ctx context.Context, nk runtime.NakamaModule, userID, categoryID, questionID string) error {
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		history := AnsweredQuestionHistory{Answered: make(map[string]bool)}
+		version := "*"
+		records, err := nk.StorageRead(ctx, []*runtime.StorageRead{{
+			Collection: quizAnsweredCollection,
+			Key:        categoryID,
+			UserID:     userID,
+		}})
+		if err != nil {
+			return err
+		}
+		if len(records) > 0 {
+			version = records[0].Version
+			if err := json.Unmarshal([]byte(records[0].Value), &history); err != nil {
+				return err
+			}
+			if history.Answered == nil {
+				history.Answered = make(map[string]bool)
+			}
+			if history.Answered[questionID] {
+				return nil
+			}
+		}
+
+		history.Answered[questionID] = true
+		value, err := json.Marshal(&history)
+		if err != nil {
+			return err
+		}
+		_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{{
+			Collection:      quizAnsweredCollection,
+			Key:             categoryID,
+			UserID:          userID,
+			Value:           string(value),
+			Version:         version,
+			PermissionRead:  0,
+			PermissionWrite: 0,
+		}})
+		if err == nil {
+			return nil
+		}
+		if attempt == maxAttempts-1 {
+			return err
+		}
+	}
+	return errors.New("failed to update answered question history")
 }
 
 func addQuestionToCategory(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -690,6 +821,15 @@ type CategoryIDRequestData struct {
 type QuestionRemoveRequestData struct {
 	CategoryID string `json:"category_id"`
 	QuestionID string `json:"question_id"`
+}
+
+type QuestionAnsweredRequestData struct {
+	CategoryID string `json:"category_id"`
+	QuestionID string `json:"question_id"`
+}
+
+type AnsweredQuestionHistory struct {
+	Answered map[string]bool `json:"answered"`
 }
 
 // -----------------------------------------------------------------------
