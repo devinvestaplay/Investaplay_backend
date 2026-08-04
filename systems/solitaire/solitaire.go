@@ -30,6 +30,8 @@ const (
 
 	solitaireScoreHistoryCollection = "ScoreHistory"
 	solitaireScoreHistoryKey        = "solitaire"
+	solitaireBestStatsCollection    = "SolitaireBestStats"
+	solitaireBestStatsKey           = "best"
 	solitaireTopK                   = 30
 	solitaireMinGames               = 5
 	solitaireTargetGames            = 30
@@ -197,6 +199,19 @@ func gameFinished(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		return utils.CreateStatus(false, http.StatusBadRequest, err.Error()), err
 	}
 
+	bestStats, err := readSolitaireBestStats(ctx, nk, userID)
+	if err != nil {
+		logger.Error("failed to read Solitaire best stats for user %s: %v", userID, err)
+		return utils.CreateStatus(false, http.StatusInternalServerError, "failed to load best stats"), err
+	}
+	if finishData.IsWinner {
+		bestStats, err = updateSolitaireBestStats(ctx, nk, userID, finishData)
+		if err != nil {
+			logger.Error("failed to update Solitaire best stats for user %s: %v", userID, err)
+			return utils.CreateStatus(false, http.StatusInternalServerError, "failed to update best stats"), err
+		}
+	}
+
 	// ----------------------------- Wallet -----------------------------
 
 	changeset := map[string]int64{"coins": int64(finishData.Coins)}
@@ -254,7 +269,91 @@ func gameFinished(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 
 	// ----------------------------- Response -----------------------------
 
-	return utils.CreateStatus(true, http.StatusOK, "match finished and rewards distributed"), nil
+	response := SolitaireFinishResponse{
+		Status:    true,
+		Code:      http.StatusOK,
+		Message:   "match finished and rewards distributed",
+		BestStats: bestStats,
+	}
+	responseJSON, err := utils.SerializeObjectToString(&response)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+	}
+	return responseJSON, nil
+}
+
+func readSolitaireBestStats(ctx context.Context, nk runtime.NakamaModule, userID string) (SolitaireBestStats, error) {
+	records, err := nk.StorageRead(ctx, []*runtime.StorageRead{{
+		Collection: solitaireBestStatsCollection,
+		Key:        solitaireBestStatsKey,
+		UserID:     userID,
+	}})
+	if err != nil {
+		return SolitaireBestStats{}, err
+	}
+	if len(records) == 0 {
+		return SolitaireBestStats{}, nil
+	}
+
+	var best SolitaireBestStats
+	if err := json.Unmarshal([]byte(records[0].Value), &best); err != nil {
+		return SolitaireBestStats{}, err
+	}
+	return best, nil
+}
+
+func updateSolitaireBestStats(ctx context.Context, nk runtime.NakamaModule, userID string, result SolitaireFinishGameData) (SolitaireBestStats, error) {
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		best := SolitaireBestStats{}
+		version := "*"
+		records, err := nk.StorageRead(ctx, []*runtime.StorageRead{{
+			Collection: solitaireBestStatsCollection,
+			Key:        solitaireBestStatsKey,
+			UserID:     userID,
+		}})
+		if err != nil {
+			return SolitaireBestStats{}, err
+		}
+		if len(records) > 0 {
+			version = records[0].Version
+			if err := json.Unmarshal([]byte(records[0].Value), &best); err != nil {
+				return SolitaireBestStats{}, err
+			}
+		}
+
+		if !best.HasRecord || result.Score > best.Score {
+			best.Score = result.Score
+		}
+		if result.TimeSeconds > 0 && (!best.HasRecord || best.TimeSeconds <= 0 || result.TimeSeconds < best.TimeSeconds) {
+			best.TimeSeconds = result.TimeSeconds
+		}
+		if result.Moves > 0 && (!best.HasRecord || best.Moves <= 0 || result.Moves < best.Moves) {
+			best.Moves = result.Moves
+		}
+		best.HasRecord = true
+
+		value, err := json.Marshal(&best)
+		if err != nil {
+			return SolitaireBestStats{}, err
+		}
+		_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{{
+			Collection:      solitaireBestStatsCollection,
+			Key:             solitaireBestStatsKey,
+			UserID:          userID,
+			Value:           string(value),
+			Version:         version,
+			PermissionRead:  0,
+			PermissionWrite: 0,
+		}})
+		if err == nil {
+			return best, nil
+		}
+		if attempt == maxAttempts-1 {
+			return SolitaireBestStats{}, err
+		}
+	}
+	return SolitaireBestStats{}, errors.New("failed to update Solitaire best stats")
 }
 
 // -----------------------------------------------------------------------
@@ -303,12 +402,29 @@ type SolitaireLifelineCosts struct {
 // -----------------------------------------------------------------------
 
 type SolitaireFinishGameData struct {
-	IsWinner  bool `json:"is_winner"`
-	Coins     int  `json:"coins"`
-	Points    int  `json:"points"`
-	TimeBonus int  `json:"time_bonus"`
-	HintsUsed int  `json:"hints_used"`
-	UndoUsed  int  `json:"undo_used"`
+	IsWinner    bool `json:"is_winner"`
+	Coins       int  `json:"coins"`
+	Points      int  `json:"points"`
+	Score       int  `json:"score"`
+	TimeSeconds int  `json:"time_seconds"`
+	Moves       int  `json:"moves"`
+	TimeBonus   int  `json:"time_bonus"`
+	HintsUsed   int  `json:"hints_used"`
+	UndoUsed    int  `json:"undo_used"`
+}
+
+type SolitaireBestStats struct {
+	HasRecord   bool `json:"has_record"`
+	Score       int  `json:"score"`
+	TimeSeconds int  `json:"time_seconds"`
+	Moves       int  `json:"moves"`
+}
+
+type SolitaireFinishResponse struct {
+	Status    bool               `json:"status"`
+	Code      int                `json:"code"`
+	Message   string             `json:"message"`
+	BestStats SolitaireBestStats `json:"best_stats"`
 }
 
 type SolitaireScoreHistory struct {
