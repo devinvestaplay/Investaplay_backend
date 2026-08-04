@@ -16,6 +16,7 @@ const (
 	LeaderboardTotalEarnedCoinsLudoID      = "total_earned_coins_ludo"
 	LeaderboardTotalEarnedCoinsQuizID      = "total_earned_coins_quiz"
 	LeaderboardTotalEarnedCoinsSolitaireID = "total_earned_coins_solitaire"
+	LeaderboardBestScoreSolitaireID        = "best_score_solitaire"
 
 	LeaderboardSkillLudoID      = "skill_ludo"
 	LeaderboardSkillQuizID      = "skill_quiz"
@@ -60,6 +61,9 @@ func InitLeaderboardSystem(ctx *context.Context, logger *runtime.Logger, nk *run
 	if err := (*nk).LeaderboardCreate(*ctx, LeaderboardTotalEarnedCoinsSolitaireID, true, "desc", "incr", solitaireRestTime, nil, true); err != nil {
 		(*logger).Info("Leaderboard Create LeaderboardTotalEarnedCoinsSolitaireID Failed : " + err.Error())
 		//return err
+	}
+	if err := (*nk).LeaderboardCreate(*ctx, LeaderboardBestScoreSolitaireID, true, "desc", "best", solitaireRestTime, nil, true); err != nil {
+		(*logger).Info("Leaderboard Create LeaderboardBestScoreSolitaireID Failed : " + err.Error())
 	}
 
 	// skill leaderboards — "set" operator so score always reflects latest computed skill

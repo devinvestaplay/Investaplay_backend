@@ -3,13 +3,16 @@
     "move_stock_to_tableau": 5,
     "move_stock_to_foundation": 10,
     "move_tableau_to_foundation": 10,
-    "move_foundation_to_tableau": -10,
+    "move_foundation_to_tableau": -15,
     "flip_tableau_card": 5,
     "recycle_stock": 0,
-    "complete_foundation_pile": 50,
-    "winning_game": 200,
-    "time_bonus_points_threshold_seconds": 300,
-    "time_bonus_points": 100
+    "time_penalty_interval_seconds": 10,
+    "time_penalty_points": 2,
+    "completion_bonus": 3000,
+    "time_bonus_max": 1000,
+    "time_bonus_points_per_second": 2,
+    "move_bonus_max": 500,
+    "move_bonus_points_per_move": 2
   },
   "lifeline_costs": {
     "hint": 5,

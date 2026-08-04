@@ -67,7 +67,7 @@ func InitSolitaire(ctx *context.Context, logger *runtime.Logger, nk *runtime.Nak
 			return "", err
 		}
 
-		if err := utils.WriteServerStorageObjectByKey(&ctx, &nk, SolitaireCollectionName, SolitaireGameConfigKey, &payload); err == nil {
+		if err := utils.WriteServerStorageObjectByKey(&ctx, &nk, SolitaireCollectionName, SolitaireGameConfigKey, &solitaireGameConfigJson); err == nil {
 			return fmt.Sprintf(`{"succeeded": %t}`, true), nil
 		} else {
 			return fmt.Sprintf(`{"succeeded": %t, "err": %s}`, false, err.Error()), err
@@ -221,6 +221,8 @@ func gameFinished(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	if err != nil {
 		return utils.CreateStatus(false, http.StatusBadRequest, err.Error()), err
 	}
+	finishData.Score = calculateSolitaireFinalScore(finishData)
+	finishData.Points = finishData.Score
 
 	bestStats, err := readSolitaireBestStats(ctx, nk, userID)
 	if err != nil {
@@ -263,12 +265,21 @@ func gameFinished(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	}
 	logger.Info("solitaire leaderboard for user %s: %+v", userID, lrecord)
 
+	if finishData.IsWinner {
+		scoreMetadata := map[string]interface{}{
+			"time_seconds": finishData.TimeSeconds,
+			"moves":        finishData.Moves,
+		}
+		record, scoreErr := nk.LeaderboardRecordWrite(ctx, leaderboard.LeaderboardBestScoreSolitaireID, userID, "", int64(finishData.Score), 0, scoreMetadata, nil)
+		if scoreErr != nil {
+			logger.Error("failed to update solitaire best-score leaderboard for user %s: %v", userID, scoreErr)
+		}
+		logger.Info("solitaire best-score leaderboard for user %s: %+v", userID, record)
+	}
+
 	// ----------------------------- Score History for Skill -----------------------------
 
-	hintCost := solitaireGameConfig.LifelineCosts.Hint
-	undoCost := solitaireGameConfig.LifelineCosts.Undo
-	adjustedScore := float64(finishData.Points) + float64(finishData.TimeBonus) -
-		float64(finishData.HintsUsed*hintCost) - float64(finishData.UndoUsed*undoCost)
+	adjustedScore := float64(finishData.Score)
 
 	scores, _ := readSolitaireScoreHistory(ctx, nk, userID)
 	scores = append(scores, adjustedScore)
@@ -386,9 +397,26 @@ func processSolitaireGameConfigJSON(jsonData string) error {
 	var data SolitaireGameConfig
 	if err := json.Unmarshal([]byte(jsonData), &data); err != nil {
 		return err
-	} else {
-		solitaireGameConfig = data
 	}
+
+	// Migrate configurations saved before the Windows-style scoring fields existed.
+	if data.RewardConfig.CompletionBonus == 0 {
+		data.RewardConfig.MoveFoundationToTableau = -15
+		data.RewardConfig.TimePenaltyIntervalSeconds = 10
+		data.RewardConfig.TimePenaltyPoints = 2
+		data.RewardConfig.CompletionBonus = 3000
+		data.RewardConfig.TimeBonusMax = 1000
+		data.RewardConfig.TimeBonusPointsPerSecond = 2
+		data.RewardConfig.MoveBonusMax = 500
+		data.RewardConfig.MoveBonusPointsPerMove = 2
+	}
+
+	normalizedJSON, err := json.Marshal(&data)
+	if err != nil {
+		return err
+	}
+	solitaireGameConfig = data
+	solitaireGameConfigJson = string(normalizedJSON)
 	return nil
 }
 
@@ -403,16 +431,19 @@ type SolitaireGameConfig struct {
 }
 
 type SolitaireRewardConfig struct {
-	MoveStockToTableau          int `json:"move_stock_to_tableau"`               // default 5
-	MoveStockToFoundation       int `json:"move_stock_to_foundation"`            // default 10
-	MoveTableauToFoundation     int `json:"move_tableau_to_foundation"`          // default 10
-	MoveFoundationToTableau     int `json:"move_foundation_to_tableau"`          // default -10
-	FlipTableauCard             int `json:"flip_tableau_card"`                   // default 5
-	RecycleStock                int `json:"recycle_stock"`                       // default 0 (unset)
-	CompleteFoundationPile      int `json:"complete_foundation_pile"`            // default 50
-	WinningGame                 int `json:"winning_game"`                        // default 200
-	TimeBonusPointsThresholdSec int `json:"time_bonus_points_threshold_seconds"` // default 300
-	TimeBonusPoints             int `json:"time_bonus_points"`                   // default 100
+	MoveStockToTableau         int `json:"move_stock_to_tableau"`
+	MoveStockToFoundation      int `json:"move_stock_to_foundation"`
+	MoveTableauToFoundation    int `json:"move_tableau_to_foundation"`
+	MoveFoundationToTableau    int `json:"move_foundation_to_tableau"`
+	FlipTableauCard            int `json:"flip_tableau_card"`
+	RecycleStock               int `json:"recycle_stock"`
+	TimePenaltyIntervalSeconds int `json:"time_penalty_interval_seconds"`
+	TimePenaltyPoints          int `json:"time_penalty_points"`
+	CompletionBonus            int `json:"completion_bonus"`
+	TimeBonusMax               int `json:"time_bonus_max"`
+	TimeBonusPointsPerSecond   int `json:"time_bonus_points_per_second"`
+	MoveBonusMax               int `json:"move_bonus_max"`
+	MoveBonusPointsPerMove     int `json:"move_bonus_points_per_move"`
 }
 
 type SolitaireLifelineCosts struct {
@@ -429,11 +460,35 @@ type SolitaireFinishGameData struct {
 	Coins       int  `json:"coins"`
 	Points      int  `json:"points"`
 	Score       int  `json:"score"`
+	CurrentScore int `json:"current_score"`
 	TimeSeconds int  `json:"time_seconds"`
 	Moves       int  `json:"moves"`
 	TimeBonus   int  `json:"time_bonus"`
 	HintsUsed   int  `json:"hints_used"`
 	UndoUsed    int  `json:"undo_used"`
+}
+
+func calculateSolitaireFinalScore(result SolitaireFinishGameData) int {
+	currentScore := result.CurrentScore
+	if currentScore < 0 {
+		currentScore = 0
+	}
+	if !result.IsWinner {
+		return currentScore
+	}
+
+	timeSeconds := result.TimeSeconds
+	if timeSeconds < 0 {
+		timeSeconds = 0
+	}
+	moves := result.Moves
+	if moves < 0 {
+		moves = 0
+	}
+	rewards := solitaireGameConfig.RewardConfig
+	timeBonus := max(0, rewards.TimeBonusMax-timeSeconds*rewards.TimeBonusPointsPerSecond)
+	moveBonus := max(0, rewards.MoveBonusMax-moves*rewards.MoveBonusPointsPerMove)
+	return currentScore + rewards.CompletionBonus + timeBonus + moveBonus
 }
 
 type SolitaireBestStats struct {
