@@ -307,6 +307,7 @@ func gameFinished(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		Status:    true,
 		Code:      http.StatusOK,
 		Message:   "match finished and rewards distributed",
+		Score:     finishData.Score,
 		BestStats: bestStats,
 	}
 	responseJSON, err := utils.SerializeObjectToString(&response)
@@ -502,6 +503,7 @@ type SolitaireFinishResponse struct {
 	Status    bool               `json:"status"`
 	Code      int                `json:"code"`
 	Message   string             `json:"message"`
+	Score     int                `json:"score"`
 	BestStats SolitaireBestStats `json:"best_stats"`
 }
 
