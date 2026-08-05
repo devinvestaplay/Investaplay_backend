@@ -366,6 +366,10 @@ func getQuestionsByCategory(ctx context.Context, logger runtime.Logger, db *sql.
 	if !exists {
 		return utils.CreateStatus(false, http.StatusNotFound, "Category not found or no questions"), nil
 	}
+	category, categoryExists := categories.Categories[req.CategoryID]
+	if !categoryExists || !category.IsActive {
+		return utils.CreateStatus(false, http.StatusNotFound, "category not found or inactive"), nil
+	}
 
 	answered, err := readAnsweredQuestions(ctx, nk, userID, req.CategoryID)
 	if err != nil {
@@ -408,6 +412,9 @@ func markQuestionAnswered(ctx context.Context, logger runtime.Logger, db *sql.DB
 	if err := utils.DeserializeObjectFromStringByRefs(&payload, &req); err != nil {
 		return utils.CreateStatus(false, http.StatusBadRequest, err.Error()), err
 	}
+	if strings.TrimSpace(req.CategoryID) == "" || strings.TrimSpace(req.QuestionID) == "" {
+		return utils.CreateStatus(false, http.StatusBadRequest, "category_id and question_id are required"), nil
+	}
 
 	qs, exists := questionsOfCategory[req.CategoryID]
 	if !exists {
@@ -430,11 +437,16 @@ func isValidPlayableQuestion(questionID string, question QuestionData) bool {
 	if !question.IsActive || strings.TrimSpace(questionID) == "" || strings.TrimSpace(question.QuestionId) == "" || question.QuestionId != questionID {
 		return false
 	}
-	if strings.TrimSpace(question.CategoryId) == "" || strings.TrimSpace(question.QuestionText) == "" || question.CorrectOptionIndex < 0 || question.CorrectOptionIndex > 3 {
+	if strings.TrimSpace(question.CategoryId) == "" || strings.TrimSpace(question.QuestionText) == "" || question.QuestionTimerSec <= 0 || question.CorrectOptionIndex < 0 || question.CorrectOptionIndex > 3 {
 		return false
 	}
 	options := []string{question.Option1, question.Option2, question.Option3, question.Option4}
-	return strings.TrimSpace(options[question.CorrectOptionIndex]) != ""
+	for _, option := range options {
+		if strings.TrimSpace(option) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func readAnsweredQuestions(ctx context.Context, nk runtime.NakamaModule, userID, categoryID string) (map[string]bool, error) {
