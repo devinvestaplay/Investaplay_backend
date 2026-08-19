@@ -18,6 +18,7 @@ const (
 	rpcIdResetupAdConfig     = "ad_resetup"
 	rpcIdGetAdConfig         = "ad_get"
 	rpcIdGetRewardedAdReward = "ad_get_rewarded_ad_reward"
+	rpcIdSpinWheelReward     = "spin_wheel_reward_claim"
 
 	AdJSONFilePath = "../configs/ad.json"
 	AdKey          = "ad"
@@ -75,6 +76,10 @@ func InitAdsSystem(ctx *context.Context, logger *runtime.Logger, nk *runtime.Nak
 		return err
 	}
 
+	if err := (*initializer).RegisterRpc(rpcIdSpinWheelReward, claimSpinWheelReward); err != nil {
+		return err
+	}
+
 	return nil
 
 }
@@ -110,6 +115,60 @@ func getRewardedAdReward(ctx context.Context, logger runtime.Logger, db *sql.DB,
 	}
 
 	return utils.CreateStatus(true), nil
+}
+
+type SpinWheelRewardClaimRequest struct {
+	Coins int `json:"coins"`
+}
+
+func claimSpinWheelReward(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		err := errors.New("invalid context")
+		return utils.CreateStatus(false, http.StatusUnauthorized, err.Error()), err
+	}
+
+	var request SpinWheelRewardClaimRequest
+	if err := json.Unmarshal([]byte(payload), &request); err != nil {
+		return utils.CreateStatus(false, http.StatusBadRequest, err.Error()), err
+	}
+
+	if !isAllowedSpinWheelReward(request.Coins) {
+		return utils.CreateStatus(false, http.StatusBadRequest, "invalid spin wheel reward"), nil
+	}
+
+	if request.Coins <= 0 {
+		return utils.CreateStatus(true, http.StatusOK, "no reward"), nil
+	}
+
+	changeset := map[string]int64{
+		"coins": int64(request.Coins),
+	}
+	metadata := map[string]interface{}{
+		"source": "spin_wheel",
+	}
+
+	updatedWallet, _, err := nk.WalletUpdate(ctx, userID, changeset, metadata, true)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusNotModified, err.Error()), err
+	}
+
+	updatedWalletJson, err := json.Marshal(updatedWallet)
+	if err != nil {
+		return utils.CreateStatus(false, http.StatusInternalServerError, err.Error()), err
+	}
+
+	logger.Info("claimSpinWheelReward userID=%s coins=%d", userID, request.Coins)
+	return utils.CreateStatus(true, http.StatusOK, string(updatedWalletJson)), nil
+}
+
+func isAllowedSpinWheelReward(coins int) bool {
+	switch coins {
+	case 0, 50, 100, 150, 200, 300, 500:
+		return true
+	default:
+		return false
+	}
 }
 
 func processAdConfigJSON(jsonData string) error {
