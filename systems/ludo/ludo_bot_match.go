@@ -55,7 +55,9 @@ func newLudoBotMatchState(config ludoBotMatchConfig) *LudoMatchState {
 		Players:          map[string]*LudoPlayer{},
 		PlayerOrder:      []string{},
 		TurnNumber:       1,
+		TurnStartedTick:  0,
 		ConsecutiveSixes: map[string]int{},
+		MissedTurns:      map[string]int{},
 		Presences:        map[string]runtime.Presence{},
 	}
 	populateLudoBotMatchPlayers(state, config)
@@ -88,7 +90,14 @@ func (m *LudoBotMatch) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 		return state
 	}
 	for _, presence := range presences {
+		if matchState.Presences == nil {
+			matchState.Presences = map[string]runtime.Presence{}
+		}
+		if matchState.MissedTurns == nil {
+			matchState.MissedTurns = map[string]int{}
+		}
 		matchState.Presences[presence.GetUserId()] = presence
+		delete(matchState.MissedTurns, presence.GetUserId())
 		if player, exists := matchState.Players[presence.GetUserId()]; exists {
 			updateHumanPlayerProfile(ctx, nk, presence, player)
 			adjustBotLevelsNearHuman(matchState, player.Level)
@@ -135,6 +144,7 @@ func (m *LudoBotMatch) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 	if current := matchState.Players[matchState.CurrentPlayerID]; current != nil && current.IsBot && matchState.Phase != PhaseWaitingForHuman {
 		processBotTurn(dispatcher, matchState, tick)
 	}
+	processDisconnectedHumanTurn(dispatcher, matchState, tick)
 	return matchState
 }
 
@@ -196,4 +206,35 @@ func processBotTurn(dispatcher runtime.MatchDispatcher, state *LudoMatchState, t
 		}
 		applyMoveAndAdvance(dispatcher, state, move)
 	}
+}
+
+func processDisconnectedHumanTurn(dispatcher runtime.MatchDispatcher, state *LudoMatchState, tick int64) {
+	if state.MatchFinished || state.Phase == PhaseWaitingForHuman {
+		return
+	}
+	player := state.Players[state.CurrentPlayerID]
+	if player == nil || player.IsBot || player.Rank > 0 {
+		return
+	}
+	if _, connected := state.Presences[player.ID]; connected {
+		return
+	}
+	if state.MissedTurns == nil {
+		state.MissedTurns = map[string]int{}
+	}
+	if state.TurnStartedTick == 0 {
+		state.TurnStartedTick = tick
+		return
+	}
+	if tick-state.TurnStartedTick < ludoBotHumanTurnTimeoutTicks {
+		return
+	}
+
+	state.MissedTurns[player.ID]++
+	if state.MissedTurns[player.ID] >= ludoBotMaxMissedTurns {
+		forfeitBotMatchPlayer(dispatcher, state, player.ID)
+		return
+	}
+
+	endTurn(dispatcher, state, false)
 }

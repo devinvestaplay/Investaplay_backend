@@ -15,6 +15,8 @@ const (
 	ludoBotDefaultAvatarID         = 1
 	ludoBotMaxConsecutiveSixes     = 3
 	ludoBotDiceAnimationDelayTicks = 12
+	ludoBotHumanTurnTimeoutTicks   = 300
+	ludoBotMaxMissedTurns          = 5
 )
 
 const (
@@ -169,6 +171,7 @@ type LudoMatchState struct {
 	MovableTokens    []int                      `json:"movable_tokens"`
 	LegalMoves       []LegalMove                `json:"legal_moves"`
 	TurnNumber       int                        `json:"turn_number"`
+	TurnStartedTick  int64                      `json:"turn_started_tick"`
 	BotActionTick    int64                      `json:"bot_action_tick"`
 	LastTick         int64                      `json:"last_tick"`
 	BotPendingMove   bool                       `json:"bot_pending_move"`
@@ -176,5 +179,6 @@ type LudoMatchState struct {
 	MatchFinished    bool                       `json:"match_finished"`
 	WinnerID         string                     `json:"winner_id,omitempty"`
 	ConsecutiveSixes map[string]int             `json:"consecutive_sixes"`
+	MissedTurns      map[string]int             `json:"missed_turns"`
 	Presences        map[string]runtime.Presence `json:"-"`
 }

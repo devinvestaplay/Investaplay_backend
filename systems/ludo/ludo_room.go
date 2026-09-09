@@ -407,13 +407,15 @@ func ludoRoomToResponse(room LudoRoomData) LudoRoomResponse {
 type LudoCustomRoomMatch struct{}
 
 type LudoCustomRoomMatchState struct {
-	RoomCode   string                      `json:"room_code"`
-	ArenaName  string                      `json:"arena_name"`
-	Mode       arena.ArenaMode             `json:"mode"`
-	HostID     string                      `json:"host_id"`
-	MaxPlayers int                         `json:"max_players"`
-	Status     string                      `json:"status"`
-	Presences  map[string]runtime.Presence `json:"-"`
+	RoomCode        string                      `json:"room_code"`
+	ArenaName       string                      `json:"arena_name"`
+	Mode            arena.ArenaMode             `json:"mode"`
+	HostID          string                      `json:"host_id"`
+	MaxPlayers      int                         `json:"max_players"`
+	Status          string                      `json:"status"`
+	LastStateOpCode int64                       `json:"last_state_opcode,omitempty"`
+	LastStateData   []byte                      `json:"last_state_data,omitempty"`
+	Presences       map[string]runtime.Presence `json:"-"`
 }
 
 func (m *LudoCustomRoomMatch) MatchInit(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, params map[string]interface{}) (interface{}, int, string) {
@@ -459,6 +461,11 @@ func (m *LudoCustomRoomMatch) MatchJoin(ctx context.Context, logger runtime.Logg
 	for _, presence := range presences {
 		matchState.Presences[presence.GetSessionId()] = presence
 	}
+	if matchState.Status == ludoCustomRoomStatusPlaying && len(matchState.LastStateData) > 0 {
+		if err := dispatcher.BroadcastMessage(matchState.LastStateOpCode, matchState.LastStateData, presences, nil, true); err != nil {
+			logger.Error("failed to send ludo custom room reconnect state: %v", err)
+		}
+	}
 	return matchState
 }
 
@@ -490,6 +497,8 @@ func (m *LudoCustomRoomMatch) MatchLoop(ctx context.Context, logger runtime.Logg
 		if len(recipients) == 0 {
 			continue
 		}
+		matchState.LastStateOpCode = message.GetOpCode()
+		matchState.LastStateData = append(matchState.LastStateData[:0], message.GetData()...)
 		if err := dispatcher.BroadcastMessage(message.GetOpCode(), message.GetData(), recipients, message, true); err != nil {
 			logger.Error("failed to relay ludo custom room message op %d: %v", message.GetOpCode(), err)
 		}

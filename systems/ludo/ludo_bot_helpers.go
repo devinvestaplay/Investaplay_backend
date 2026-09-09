@@ -85,6 +85,9 @@ func broadcastMatchStart(dispatcher runtime.MatchDispatcher, state *LudoMatchSta
 }
 
 func broadcastTurnStart(dispatcher runtime.MatchDispatcher, state *LudoMatchState) {
+	if state.TurnStartedTick == 0 {
+		state.TurnStartedTick = state.LastTick
+	}
 	broadcastPayload(dispatcher, OpTurnStart, map[string]interface{}{"current_player_id": state.CurrentPlayerID, "turn_number": state.TurnNumber, "phase": state.Phase})
 }
 
@@ -126,7 +129,44 @@ func finishBotMatch(dispatcher runtime.MatchDispatcher, state *LudoMatchState) {
 			state.Ranks = append(state.Ranks, player.ID)
 		}
 	}
+	for _, playerID := range state.PlayerOrder {
+		player := state.Players[playerID]
+		if player != nil && player.Rank > 0 && !ludoRankListContains(state.Ranks, player.ID) {
+			state.Ranks = append(state.Ranks, player.ID)
+		}
+	}
 	broadcastPayload(dispatcher, OpMatchFinished, ludoMatchFinishedPayload{MatchID: state.MatchID, Mode: state.Mode, Ranks: state.Ranks, Players: state.Players})
+}
+
+func forfeitBotMatchPlayer(dispatcher runtime.MatchDispatcher, state *LudoMatchState, playerID string) {
+	player := state.Players[playerID]
+	if player == nil || player.Rank > 0 {
+		return
+	}
+	player.Rank = len(state.Players)
+	state.CurrentDice = 0
+	state.LegalMoves = nil
+	state.MovableTokens = nil
+	state.BotPendingMove = false
+
+	if shouldFinishMatch(state) {
+		finishBotMatch(dispatcher, state)
+		return
+	}
+	state.CurrentPlayerID = nextPlayerID(state, false)
+	state.TurnNumber++
+	state.Phase = PhaseWaitingForRoll
+	state.TurnStartedTick = state.LastTick
+	broadcastTurnStart(dispatcher, state)
+}
+
+func ludoRankListContains(ranks []string, playerID string) bool {
+	for _, rankedPlayerID := range ranks {
+		if rankedPlayerID == playerID {
+			return true
+		}
+	}
+	return false
 }
 
 func ludoStartPlayers(state *LudoMatchState) []*LudoStartPlayer {

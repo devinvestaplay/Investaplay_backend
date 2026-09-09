@@ -94,6 +94,7 @@ func endTurn(dispatcher runtime.MatchDispatcher, state *LudoMatchState, samePlay
 		state.TurnNumber++
 	}
 	state.Phase = PhaseWaitingForRoll
+	state.TurnStartedTick = state.LastTick
 	broadcastTurnStart(dispatcher, state)
 	if current := state.Players[state.CurrentPlayerID]; current != nil && current.IsBot {
 		state.BotActionTick = state.LastTick + randomDelayTicks(8, 18)

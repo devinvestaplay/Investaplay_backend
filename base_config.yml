@@ -34,7 +34,7 @@ socket:
   ping_period_ms: 15000
 
 match:
-  max_empty_sec: 10
+  max_empty_sec: 300
 
 # session:
 #   encryption_key: "keyggggg44enc_hokmffgh6rttf0989678"
