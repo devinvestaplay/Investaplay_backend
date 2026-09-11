@@ -1,0 +1,249 @@
+{
+  "commands": [
+    {
+      "commandName": "StartGame",
+      "commandNumber": 4
+    },
+    {
+      "commandName": "SelectPlayerTurn",
+      "commandNumber": 5,
+      "playerId": 0
+    },
+    {
+      "commandName": "WaitForRollDice",
+      "commandNumber": 6,
+      "playerId": 0
+    },
+    {
+      "commandName": "RollDice",
+      "commandNumber": 7,
+      "diceValue": 6,
+      "isReroll": false,
+      "playerId": 0,
+      "rollState": 0
+    },
+    {
+      "commandName": "WaitForPlayerMove",
+      "commandNumber": 8,
+      "moveablePieces": {
+        "0": [
+          {
+            "diceValue": 6,
+            "passed": 0,
+            "pieceID": 0,
+            "usable": true,
+            "captureOpponent": false
+          }
+        ],
+        "1": [
+          {
+            "diceValue": 6,
+            "passed": 0,
+            "pieceID": 1,
+            "usable": true,
+            "captureOpponent": false
+          }
+        ],
+        "2": [
+          {
+            "diceValue": 6,
+            "passed": 0,
+            "pieceID": 2,
+            "usable": true,
+            "captureOpponent": false
+          }
+        ],
+        "3": [
+          {
+            "diceValue": 6,
+            "passed": 0,
+            "pieceID": 3,
+            "usable": true,
+            "captureOpponent": false
+          }
+        ]
+      },
+      "playerId": 0
+    },
+    {
+      "commandName": "PlayerMove",
+      "commandNumber": 9,
+      "moveAmount": 6,
+      "pieceId": 0,
+      "playerId": 0
+    },
+    {
+      "commandName": "WaitForRollDice",
+      "commandNumber": 10,
+      "playerId": 0
+    },
+    {
+      "commandName": "RollDice",
+      "commandNumber": 11,
+      "diceValue": 1,
+      "isReroll": false,
+      "playerId": 0,
+      "rollState": 0
+    },
+    {
+      "commandName": "WaitForPlayerMove",
+      "commandNumber": 12,
+      "moveablePieces": {
+        "0": [
+          {
+            "diceValue": 1,
+            "passed": 1,
+            "pieceID": 0,
+            "usable": true,
+            "captureOpponent": false
+          }
+        ]
+      },
+      "playerId": 0
+    },
+    {
+      "commandName": "PlayerMove",
+      "commandNumber": 13,
+      "moveAmount": 1,
+      "pieceId": 0,
+      "playerId": 0
+    },
+    {
+      "commandName": "SelectPlayerTurn",
+      "commandNumber": 14,
+      "playerId": 2
+    },
+    {
+      "commandName": "WaitForRollDice",
+      "commandNumber": 15,
+      "playerId": 2
+    },
+    {
+      "commandName": "ServerPlayerLeft",
+      "commandNumber": 16,
+      "playerId": 2
+    },
+    {
+      "commandName": "FinishGame",
+      "commandNumber": 17,
+      "matchCompleted": true,
+      "playerRankings": {
+        "0": 1,
+        "2": 5
+      },
+      "playerReachedFinal": 2,
+      "playerReachedFinalRank": 5
+    }
+  ],
+  "snapshot": {
+    "commandNumber": 15,
+    "moves": {},
+    "phase": "roll",
+    "remainingMs": 15000,
+    "state": {
+      "allPlayerUserSmallData": {
+        "0": null,
+        "2": null
+      },
+      "arenaType": 0,
+      "currentPlayer": 2,
+      "currentPlayerDiceRolls": [],
+      "currentPlayerMaxRolled": 0,
+      "currentPlayerRollsAvaiable": 1,
+      "isWaitingMove": false,
+      "isWatingRollDice": true,
+      "matchConfig": {
+        "PieceFinishToWinCount": 4,
+        "isQuick": false
+      },
+      "playerRanking": {},
+      "playerStates": {
+        "0": 0,
+        "2": 0
+      },
+      "players": [
+        {
+          "deaths": 0,
+          "id": 0,
+          "isBot": false,
+          "kills": 0,
+          "pieces": [
+            {
+              "onHomeColumn": false,
+              "passed": 2,
+              "pieceId": 0,
+              "playerId": 0,
+              "position": 1
+            },
+            {
+              "onHomeColumn": false,
+              "passed": 0,
+              "pieceId": 1,
+              "playerId": 0,
+              "position": -1
+            },
+            {
+              "onHomeColumn": false,
+              "passed": 0,
+              "pieceId": 2,
+              "playerId": 0,
+              "position": -1
+            },
+            {
+              "onHomeColumn": false,
+              "passed": 0,
+              "pieceId": 3,
+              "playerId": 0,
+              "position": -1
+            }
+          ],
+          "piecesFinished": 0,
+          "profile": null,
+          "startPosition": 0,
+          "userId": "0"
+        },
+        {
+          "deaths": 0,
+          "id": 2,
+          "isBot": false,
+          "kills": 0,
+          "pieces": [
+            {
+              "onHomeColumn": false,
+              "passed": 0,
+              "pieceId": 0,
+              "playerId": 2,
+              "position": -1
+            },
+            {
+              "onHomeColumn": false,
+              "passed": 0,
+              "pieceId": 1,
+              "playerId": 2,
+              "position": -1
+            },
+            {
+              "onHomeColumn": false,
+              "passed": 0,
+              "pieceId": 2,
+              "playerId": 2,
+              "position": -1
+            },
+            {
+              "onHomeColumn": false,
+              "passed": 0,
+              "pieceId": 3,
+              "playerId": 2,
+              "position": -1
+            }
+          ],
+          "piecesFinished": 0,
+          "profile": null,
+          "startPosition": 26,
+          "userId": "2"
+        }
+      ]
+    },
+    "version": 1
+  }
+}
