@@ -1,7 +1,5 @@
 # Ludo Custom Room RPCs
 
-> For current gameplay authority and payment behavior, see [Ludo protocol 2](LUDO_AUTHORITATIVE_V2.md). Room creation/joining RPCs remain available; fees are collected by Nakama when all players are ready, and clients no longer supply paid results.
-
 This guide is for Unity/client developers implementing Ludo custom room creation and joining through Nakama RPCs.
 
 ## Required Arena Config
