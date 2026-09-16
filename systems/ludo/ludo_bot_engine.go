@@ -20,6 +20,7 @@ func rollForCurrentPlayer(dispatcher runtime.MatchDispatcher, state *LudoMatchSt
 		return err
 	}
 	state.CurrentDice = dice
+	state.StateVersion++
 	if dice == 6 {
 		state.ConsecutiveSixes[player.ID]++
 	} else {
@@ -54,6 +55,7 @@ func applyMoveAndAdvance(dispatcher runtime.MatchDispatcher, state *LudoMatchSta
 		return
 	}
 	state.Phase = PhaseAnimatingMove
+	state.StateVersion++
 	token := &player.Tokens[move.TokenID]
 	token.Position = move.ToPosition
 	token.Finished = move.FinishesToken
@@ -85,6 +87,7 @@ func applyMoveAndAdvance(dispatcher runtime.MatchDispatcher, state *LudoMatchSta
 }
 
 func endTurn(dispatcher runtime.MatchDispatcher, state *LudoMatchState, samePlayer bool) {
+	state.StateVersion++
 	state.CurrentDice = 0
 	state.LegalMoves = nil
 	state.MovableTokens = nil

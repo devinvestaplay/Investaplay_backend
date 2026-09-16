@@ -121,6 +121,7 @@ func finishBotMatch(dispatcher runtime.MatchDispatcher, state *LudoMatchState) {
 		return
 	}
 	state.MatchFinished = true
+	state.StateVersion++
 	state.Phase = PhaseGameFinished
 	for _, playerID := range state.PlayerOrder {
 		player := state.Players[playerID]

@@ -1,4 +1,5 @@
 {
+  "entry_fee_cost": 10,
   "removeTwoWrongAnswerCoinCost": 5,
   "passQuestionCoinCost": 8,
   "autoCorrectCoinCost": 15,

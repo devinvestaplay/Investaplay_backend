@@ -109,6 +109,11 @@ func ludoOnlineBotMatchCreate(ctx context.Context, logger runtime.Logger, db *sq
 	if err != nil {
 		return "", err
 	}
+	if req.Protocol == 2 {
+		options.Protocol = 2
+		options.StorageKey = "v2_" + options.StorageKey
+		options.ActiveStorageKey = "v2_" + options.ActiveStorageKey
+	}
 
 	result, err := createOrGetLudoBotMatch(ctx, logger, nk, options)
 	if err != nil {
@@ -175,12 +180,13 @@ func newLudoOnlineBotMatchCreateOptions(userID string, req LudoOnlineBotMatchCre
 	}
 
 	return ludoBotMatchCreateOptions{
-		HumanUserID: userID,
-		Mode:        mode,
-		Difficulty:  difficulty,
-		RequestID:   req.RequestID,
-		IncludeBot:  true,
-		StorageKey:  ludoOnlineBotRequestStorageKey(userID, req.ArenaName, req.PlayerCount, req.RequestID),
+		HumanUserID:     userID,
+		Mode:            mode,
+		Difficulty:      difficulty,
+		RequestID:       req.RequestID,
+		IncludeBot:      true,
+		StorageKey:      ludoOnlineBotRequestStorageKey(userID, req.ArenaName, req.PlayerCount, req.RequestID),
+		ActiveStorageKey: ludoOnlineBotActiveStorageKey(userID, req.ArenaName, req.PlayerCount),
 		StorageRecord: ludoBotMatchRequestRecord{
 			Mode:        mode,
 			Difficulty:  string(difficulty),
@@ -319,9 +325,17 @@ func newLudoBotMatchCreateOptions(userID string, req LudoBotMatchCreateRequest) 
 }
 
 func createOrGetLudoBotMatch(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, options ludoBotMatchCreateOptions) (ludoBotMatchCreateResult, error) {
+	if strings.TrimSpace(options.ActiveStorageKey) != "" {
+		if record, found, err := readLudoBotRequestRecord(ctx, nk, options.ActiveStorageKey); err != nil {
+			return ludoBotMatchCreateResult{}, runtime.NewError("failed to read active bot match", 13)
+		} else if found && isLiveLudoBotMatch(ctx, nk, record.MatchID) {
+			return ludoBotMatchCreateResult{MatchID: record.MatchID, Mode: record.Mode, Difficulty: record.Difficulty}, nil
+		}
+	}
+
 	if record, found, err := readLudoBotRequestRecord(ctx, nk, options.StorageKey); err != nil {
 		return ludoBotMatchCreateResult{}, runtime.NewError("failed to read bot match request", 13)
-	} else if found {
+	} else if found && isLiveLudoBotMatch(ctx, nk, record.MatchID) {
 		return ludoBotMatchCreateResult{MatchID: record.MatchID, Mode: record.Mode, Difficulty: record.Difficulty}, nil
 	}
 
@@ -336,8 +350,24 @@ func createOrGetLudoBotMatch(ctx context.Context, logger runtime.Logger, nk runt
 	if err := writeLudoBotRequestRecord(ctx, nk, options.StorageKey, record); err != nil {
 		logger.Error("failed to store ludo bot request %s for user %s: %v", options.RequestID, options.HumanUserID, err)
 	}
+	if strings.TrimSpace(options.ActiveStorageKey) != "" {
+		if err := writeLudoBotRequestRecord(ctx, nk, options.ActiveStorageKey, record); err != nil {
+			logger.Error("failed to store active ludo bot match for user %s: %v", options.HumanUserID, err)
+		}
+	}
 
 	return ludoBotMatchCreateResult{MatchID: matchID, Mode: options.Mode, Difficulty: string(options.Difficulty)}, nil
+}
+
+func isLiveLudoBotMatch(ctx context.Context, nk runtime.NakamaModule, matchID string) bool {
+	if strings.TrimSpace(matchID) == "" {
+		return false
+	}
+	state, err := readLudoBotMatchState(ctx, nk, matchID)
+	if err != nil || state == nil {
+		return false
+	}
+	return !state.MatchFinished
 }
 
 func createLudoBotMatch(ctx context.Context, nk runtime.NakamaModule, options ludoBotMatchCreateOptions) (string, error) {
@@ -346,6 +376,7 @@ func createLudoBotMatch(ctx context.Context, nk runtime.NakamaModule, options lu
 
 func ludoBotMatchCreateParams(options ludoBotMatchCreateOptions) map[string]interface{} {
 	return map[string]interface{}{
+		"protocol":       options.Protocol,
 		"mode":           options.Mode,
 		"human_user_id":  options.HumanUserID,
 		"include_bot":    options.IncludeBot,
@@ -408,6 +439,10 @@ func ludoBotRequestStorageKey(userID string, requestID string) string {
 
 func ludoOnlineBotRequestStorageKey(userID string, arenaName string, playerCount int, requestID string) string {
 	return ludoOnlineBotMatchRequestStorageKey + sanitizeLudoBotIDPart(userID) + "_" + sanitizeLudoBotIDPart(arenaName) + "_" + fmt.Sprint(playerCount) + "_" + sanitizeLudoBotIDPart(requestID)
+}
+
+func ludoOnlineBotActiveStorageKey(userID string, arenaName string, playerCount int) string {
+	return ludoOnlineBotActiveStorageKeyPrefix + sanitizeLudoBotIDPart(userID) + "_" + sanitizeLudoBotIDPart(arenaName) + "_" + fmt.Sprint(playerCount)
 }
 
 func ludoUnityPlayerIDForSeat(seat int) int {

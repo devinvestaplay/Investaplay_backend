@@ -6,6 +6,7 @@ const (
 	ludoBotMatchModule             = "ludo_bot_match"
 	ludoBotMatchRequestStorageKey       = "bot_match_request_"
 	ludoOnlineBotMatchRequestStorageKey = "online_bot_match_request_"
+	ludoOnlineBotActiveStorageKeyPrefix = "online_bot_active_match_"
 	ludoBotMatchTickRate           = 10
 	ludoBotTokensPerPlayer         = 4
 	ludoBotHomePosition            = 57
@@ -43,13 +44,15 @@ const (
 )
 
 type ludoBotMatchCreateOptions struct {
-	HumanUserID   string
-	Mode          string
-	Difficulty    BotDifficulty
-	RequestID     string
-	IncludeBot    bool
-	StorageKey    string
-	StorageRecord ludoBotMatchRequestRecord
+	Protocol        int
+	HumanUserID      string
+	Mode             string
+	Difficulty       BotDifficulty
+	RequestID        string
+	IncludeBot       bool
+	StorageKey       string
+	ActiveStorageKey string
+	StorageRecord    ludoBotMatchRequestRecord
 }
 
 type ludoBotMatchCreateResult struct {
@@ -82,6 +85,7 @@ type LudoBotMatchCreateResponse struct {
 }
 
 type LudoOnlineBotMatchCreateRequest struct {
+	Protocol    int    `json:"protocol"`
 	ArenaName   string `json:"arena_name"`
 	PlayerCount int    `json:"player_count"`
 	Difficulty  string `json:"difficulty"`
@@ -157,6 +161,12 @@ type ScoredMove struct {
 }
 
 type LudoMatchState struct {
+	Online           *ludoOnlineState           `json:"online,omitempty"`
+	StateVersion     int64                      `json:"state_version"`
+	ServerTimeMs     int64                      `json:"server_time_ms"`
+	TurnDeadlineMs   int64                      `json:"turn_deadline_ms"`
+	AcceptedActions  map[string]int64           `json:"-"`
+	FinishedTick     int64                      `json:"-"`
 	MatchID          string                     `json:"match_id"`
 	Mode             string                     `json:"mode"`
 	HumanUserID      string                     `json:"human_user_id"`

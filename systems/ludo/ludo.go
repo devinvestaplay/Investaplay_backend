@@ -36,6 +36,8 @@ const (
 )
 
 func InitLudo(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaModule, initializer *runtime.Initializer) error {
+	if err := (*initializer).RegisterMatchmakerMatched(ludoAuthoritativeMatched); err != nil { return err }
+	if err := (*initializer).RegisterRpc("ludo_authoritative_party_create", ludoCreatePartyMatch); err != nil { return err }
 
 	if err := (*initializer).RegisterMatch(ludoCustomRoomMatchModule, func(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule) (runtime.Match, error) {
 		return &LudoCustomRoomMatch{}, nil

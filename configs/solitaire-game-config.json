@@ -1,4 +1,5 @@
 {
+  "entry_fee_cost": 10,
   "reward_config": {
     "move_stock_to_tableau": 5,
     "move_stock_to_foundation": 10,
