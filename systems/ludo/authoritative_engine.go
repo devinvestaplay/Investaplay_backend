@@ -50,18 +50,19 @@ type authMoveData struct {
 	Capture bool `json:"captureOpponent"`
 }
 type authGame struct {
-	Players   []*authPlayer
-	Current   int
-	Rolls     []int
-	Available int
-	Sixes     int
-	Phase     string
-	Number    int
-	Version   int
-	Deadline  int64
-	Ranks     map[int]int
-	Left      map[int]bool
-	Commands  []authCommand
+	Players       []*authPlayer
+	Current       int
+	Rolls         []int
+	Available     int
+	Sixes         int
+	Phase         string
+	Number        int
+	Version       int
+	Deadline      int64
+	BotActionTick int64
+	Ranks         map[int]int
+	Left          map[int]bool
+	Commands      []authCommand
 }
 
 func newAuthGame(players []*authPlayer) *authGame {
@@ -96,6 +97,9 @@ func (g *authGame) start(tick int64) {
 	g.selectTurn(g.Current, tick)
 	// Initial board reveal lasts several seconds in Unity.
 	g.Deadline += 5 * authoritativeTickRate
+	if g.BotActionTick > 0 {
+		g.BotActionTick += 5 * authoritativeTickRate
+	}
 }
 func (g *authGame) selectTurn(id int, tick int64) {
 	g.Current = id
@@ -214,12 +218,10 @@ func (g *authGame) advance(tick int64) {
 	}
 	moves := g.moves()
 	g.Deadline = tick + authoritativeTurnTicks
-	if g.player(g.Current).Bot {
-		g.Deadline = tick + 3*authoritativeTickRate
-	}
 	if len(moves) > 0 {
 		g.Phase = "move"
 		g.emit("WaitForPlayerMove", authCommand{"playerId": g.Current, "moveablePieces": moves})
+		scheduleAuthoritativeBotAction(g, tick)
 		return
 	}
 	allFinal := true
@@ -231,8 +233,10 @@ func (g *authGame) advance(tick int64) {
 	if g.Available > 0 && !(allFinal && len(g.Rolls) > 0) {
 		g.Phase = "roll"
 		g.emit("WaitForRollDice", authCommand{"playerId": g.Current})
+		scheduleAuthoritativeBotAction(g, tick)
 		return
 	}
+	g.BotActionTick = 0
 	g.next(tick)
 }
 func (g *authGame) roll(dice int, tick int64) error {

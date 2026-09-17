@@ -318,10 +318,33 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 			delete(s.Responses[user], old)
 		}
 	}
+	if s.Game.Phase != "ready" && s.Game.Phase != "finished" {
+		current := s.Game.player(s.Game.Current)
+		if current != nil && current.Bot && s.Game.BotActionTick > 0 && tick >= s.Game.BotActionTick {
+			started := time.Now()
+			s.Game.BotActionTick = 0
+			if err := performAuthoritativeBotAction(s.Game, logger, tick); err != nil {
+				if logger != nil {
+					logger.Error("authoritative Ludo bot action: %v", err)
+				}
+			} else {
+				s.flush(d, logger, tick, "", started)
+			}
+		}
+	}
 	if s.Game.Phase != "ready" && s.Game.Phase != "finished" && tick >= s.Game.Deadline {
 		started := time.Now()
-		if err := s.Game.timeout(tick); err != nil {
-			logger.Error("authoritative Ludo timeout: %v", err)
+		current := s.Game.player(s.Game.Current)
+		var err error
+		if current != nil && current.Bot {
+			err = performAuthoritativeBotAction(s.Game, logger, tick)
+		} else {
+			err = s.Game.timeout(tick)
+		}
+		if err != nil {
+			if logger != nil {
+				logger.Error("authoritative Ludo timeout: %v", err)
+			}
 		} else {
 			s.flush(d, logger, tick, "", started)
 		}

@@ -401,7 +401,7 @@ func isSupportedLudoBotMode(mode string) bool {
 }
 
 func isSupportedBotDifficulty(difficulty BotDifficulty) bool {
-	return difficulty == BotEasy || difficulty == BotMedium || difficulty == BotHard
+	return difficulty == BotEasy || difficulty == BotMedium || difficulty == BotHard || difficulty == BotExpert
 }
 
 func ludoBotPlayerCount(mode string) int {

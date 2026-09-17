@@ -101,15 +101,17 @@ func authoritativeBotCreate(ctx context.Context, nk runtime.NakamaModule, user s
 	}
 	players := []*authPlayer{}
 	responsePlayers := []LudoOnlineBotMatchPlayer{}
+	usedBotTemplates := map[int]bool{}
 	for i := 0; i < req.PlayerCount; i++ {
 		seat := i
 		if req.PlayerCount == 2 {
 			seat = i * 2
 		}
 		id := fmt.Sprintf("bot_%s_%d", user, seat)
-		name := fmt.Sprintf("Bot %d", i)
+		name := ""
 		username := id
 		avatar := "avatar_1"
+		profile := map[string]interface{}{}
 		if i == 0 {
 			id = user
 			username = account.User.Username
@@ -118,8 +120,22 @@ func authoritativeBotCreate(ctx context.Context, nk runtime.NakamaModule, user s
 				name = username
 			}
 			avatar = ludoNormalizeAvatarAddressableKey(account.User.AvatarUrl)
+		} else {
+			template := selectUniqueAuthoritativeBotTemplate(i, usedBotTemplates)
+			name = template.Name
+			avatar = ludoAvatarAddressableKey(template.AvatarID)
+			profile["country"] = template.Country
+			profile["level"] = randomBotLevel(ludoBotDefaultHumanLevel)
+			profile["botDifficulty"] = string(BotExpert)
+			profile["botPersonality"] = string(randomAuthoritativeBotPersonality())
 		}
-		profile := map[string]interface{}{"userID": id, "username": username, "displayName": name, "currentAvatar": avatar, "currentDice": 1, "currentBoard": 1, "currentPiece": 1}
+		profile["userID"] = id
+		profile["username"] = username
+		profile["displayName"] = name
+		profile["currentAvatar"] = avatar
+		profile["currentDice"] = 1
+		profile["currentBoard"] = 1
+		profile["currentPiece"] = 1
 		players = append(players, &authPlayer{ID: seat, UserID: id, Bot: i != 0, Profile: profile})
 		responsePlayers = append(responsePlayers, LudoOnlineBotMatchPlayer{UserID: id, DisplayName: name, Avatar: avatar, PlayerID: seat, Seat: i, IsBot: i != 0})
 	}

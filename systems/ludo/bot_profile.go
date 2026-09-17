@@ -6,6 +6,16 @@ const (
 	BotEasy   BotDifficulty = "easy"
 	BotMedium BotDifficulty = "medium"
 	BotHard   BotDifficulty = "hard"
+	BotExpert BotDifficulty = "expert"
+)
+
+type BotPersonality string
+
+const (
+	BotAggressive BotPersonality = "aggressive"
+	BotDefensive  BotPersonality = "defensive"
+	BotBalanced   BotPersonality = "balanced"
+	BotStrategic  BotPersonality = "strategic"
 )
 
 type BotTemplate struct {

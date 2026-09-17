@@ -204,6 +204,9 @@ func selectBotMove(state *LudoMatchState, player *LudoPlayer) (LegalMove, bool) 
 	case BotHard:
 		chance = 90
 		fallbackPool = 2
+	case BotExpert:
+		chance = 95
+		fallbackPool = 2
 	}
 	roll, _ := secureRandomInt(100)
 	if roll < chance {
@@ -234,4 +237,3 @@ func secureRandomInt(max int) (int, error) {
 	}
 	return int(value.Int64()), nil
 }
-
