@@ -46,8 +46,18 @@ type authoritativeBotMove struct {
 	CaptureRisk      float64
 	Pressure         float64
 	FutureValue      float64
+	OpponentFinish   float64
+	PreventedFinish  float64
+	FutureMobility   float64
 	Score            float64
 	Reason           string
+}
+
+type authoritativeLookAhead struct {
+	CaptureRisk      float64
+	OpponentFinish   float64
+	FutureMobility   float64
+	OpponentMobility float64
 }
 
 func selectUniqueAuthoritativeBotTemplate(seat int, used map[int]bool) BotTemplate {
@@ -288,6 +298,247 @@ func predictAuthoritativeFutureValue(game *authGame, player *authPlayer, move au
 	return total * (1 - move.CaptureRisk)
 }
 
+func simulateAuthoritativeMove(game *authGame, move authoritativeBotMove) (*authGame, error) {
+	next := game.clone()
+	next.Current = game.Current
+	next.Phase = "move"
+	next.Rolls = []int{move.Dice}
+	next.Commands = nil
+	if err := next.move(move.PieceID, move.Dice, 0); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+func authoritativeOpponentFinishThreat(game *authGame, playerID int) float64 {
+	if game == nil {
+		return 0
+	}
+	probe := game.clone()
+	threat := 0.0
+	for _, opponent := range probe.Players {
+		if opponent.ID == playerID || probe.Left[opponent.ID] || probe.Ranks[opponent.ID] > 0 {
+			continue
+		}
+		probe.Current = opponent.ID
+		finishDice := 0
+		for dice := 1; dice <= 6; dice++ {
+			canFinish := false
+			for pieceID, piece := range opponent.Pieces {
+				if probe.legal(pieceID, dice) && piece.Passed+dice == 57 {
+					canFinish = true
+					break
+				}
+			}
+			if canFinish {
+				finishDice++
+			}
+		}
+		weight := 1.0
+		if opponent.Finished >= 3 {
+			weight = 2.25
+		} else if opponent.Finished == 2 {
+			weight = 1.5
+		}
+		weight *= learnedOpponentFinishMultiplier(probe.HumanModels[opponent.ID])
+		threat += float64(finishDice) / 6.0 * weight
+	}
+	return threat
+}
+
+func authoritativeLookAheadAfterMove(game *authGame, playerID, movedPieceID int) authoritativeLookAhead {
+	metrics := authoritativeLookAhead{}
+	if game == nil {
+		return metrics
+	}
+	movedPlayer := game.player(playerID)
+	if movedPlayer == nil || movedPieceID < 0 || movedPieceID >= len(movedPlayer.Pieces) {
+		return metrics
+	}
+	movedPiece := movedPlayer.Pieces[movedPieceID]
+	probe := game.clone()
+	survival := 1.0
+	for _, opponent := range probe.Players {
+		if opponent.ID == playerID || probe.Left[opponent.ID] || probe.Ranks[opponent.ID] > 0 {
+			continue
+		}
+		probe.Current = opponent.ID
+		captureDice := 0
+		finishDice := 0
+		legalOptions := 0
+		for dice := 1; dice <= 6; dice++ {
+			canCapture := false
+			canFinish := false
+			for pieceID, piece := range opponent.Pieces {
+				if !probe.legal(pieceID, dice) {
+					continue
+				}
+				legalOptions++
+				passed, position := probe.destination(opponent, piece, dice)
+				if passed == 57 {
+					canFinish = true
+				}
+				if movedPiece.Passed > 0 && movedPiece.Passed < 52 && !authSafe(movedPiece.Position) && passed < 52 && position == movedPiece.Position {
+					canCapture = true
+				}
+			}
+			if canCapture {
+				captureDice++
+			}
+			if canFinish {
+				finishDice++
+			}
+		}
+		risk := float64(captureDice) / 6.0
+		risk *= learnedOpponentRiskMultiplier(probe.HumanModels[opponent.ID])
+		risk = math.Min(1, risk)
+		survival *= 1 - risk
+		finishWeight := 1.0
+		if opponent.Finished >= 3 {
+			finishWeight = 2.25
+		}
+		finishWeight *= learnedOpponentFinishMultiplier(probe.HumanModels[opponent.ID])
+		metrics.OpponentFinish += float64(finishDice) / 6.0 * finishWeight
+		metrics.OpponentMobility += float64(legalOptions) / 24.0
+	}
+	metrics.CaptureRisk = 1 - survival
+
+	probe.Current = playerID
+	legalDice := 0
+	for dice := 1; dice <= 6; dice++ {
+		for pieceID := range movedPlayer.Pieces {
+			if probe.legal(pieceID, dice) {
+				legalDice++
+				break
+			}
+		}
+	}
+	metrics.FutureMobility = float64(legalDice) / 6.0
+	return metrics
+}
+
+func activeAuthoritativeTokens(player *authPlayer) int {
+	active := 0
+	if player == nil {
+		return active
+	}
+	for _, piece := range player.Pieces {
+		if piece.Passed > 0 && piece.Passed < 57 {
+			active++
+		}
+	}
+	return active
+}
+
+func evaluateExpertAuthoritativeMove(game *authGame, player *authPlayer, move authoritativeBotMove) authoritativeBotMove {
+	next, err := simulateAuthoritativeMove(game, move)
+	if err != nil {
+		move.Score = math.Inf(-1)
+		move.Reason = "INVALID"
+		return move
+	}
+	lookAhead := authoritativeLookAheadAfterMove(next, player.ID, move.PieceID)
+	beforeFinishThreat := authoritativeOpponentFinishThreat(game, player.ID)
+	move.CaptureRisk = lookAhead.CaptureRisk
+	move.OpponentFinish = lookAhead.OpponentFinish
+	move.PreventedFinish = math.Max(0, beforeFinishThreat-lookAhead.OpponentFinish)
+	move.FutureMobility = lookAhead.FutureMobility
+	captureMultiplier := 1.0
+	riskMultiplier := 1.0
+	safetyMultiplier := 1.0
+	mobilityMultiplier := 1.0
+	preventMultiplier := 1.0
+	switch authoritativeBotPersonality(player) {
+	case BotAggressive:
+		captureMultiplier = 1.15
+		riskMultiplier = 0.85
+	case BotDefensive:
+		captureMultiplier = 0.95
+		riskMultiplier = 1.25
+		safetyMultiplier = 1.20
+	case BotStrategic:
+		mobilityMultiplier = 1.20
+		preventMultiplier = 1.20
+	}
+
+	progress := move.ToPassed - move.FromPassed
+	if move.Spawn {
+		progress = 1
+	}
+	move.Score = float64(progress)*18 + move.FutureMobility*240*mobilityMultiplier - lookAhead.OpponentMobility*90
+	move.Reason = "PROGRESS"
+
+	if move.Spawn {
+		active := activeAuthoritativeTokens(player)
+		switch {
+		case active == 0:
+			move.Score += 520
+		case active == 1:
+			move.Score += 320
+		case active == 2:
+			move.Score += 100
+		default:
+			move.Score -= 180
+		}
+		move.Reason = "SPAWN_STRATEGIC"
+	}
+	if move.Safe && !move.Spawn {
+		move.Score += 480 * safetyMultiplier
+		move.Reason = "SAFE_POSITION"
+	}
+	if move.HomeEntry {
+		move.Score += 850
+		move.Reason = "ENTER_HOME"
+	}
+	if move.EscapesDanger {
+		move.Score += 1150 + float64(move.FromPassed)*12
+		move.Reason = "ESCAPE_HIGH_VALUE"
+	}
+	if move.Capture {
+		move.Score += (900 + float64(move.CapturedProgress)*22) * captureMultiplier
+		move.Reason = "CAPTURE_STRATEGIC"
+	}
+	if move.PreventedFinish > 0 {
+		move.Score += move.PreventedFinish * 1800 * preventMultiplier
+		move.Reason = "PREVENT_OPPONENT_FINISH"
+	}
+	if move.ReachHome {
+		move.Score += 2400
+		move.Reason = "FINISH_HIGH_VALUE"
+	}
+
+	advancedValue := 450 + float64(move.ToPassed)*34
+	move.Score -= move.CaptureRisk * advancedValue * riskMultiplier
+	move.Score -= move.OpponentFinish * 700
+	return move
+}
+
+func evaluateMediumAuthoritativeMove(move authoritativeBotMove) authoritativeBotMove {
+	progress := move.ToPassed - move.FromPassed
+	if move.Spawn {
+		progress = 1
+	}
+	move.Score = float64(progress) * 15
+	move.Reason = "PROGRESS"
+	if move.Spawn {
+		move.Score += 100
+		move.Reason = "SPAWN"
+	}
+	if move.Capture {
+		move.Score += 600 + float64(move.CapturedProgress)*5
+		move.Reason = "CAPTURE"
+	}
+	if move.HomeEntry {
+		move.Score += 350
+		move.Reason = "ENTER_HOME"
+	}
+	if move.ReachHome {
+		move.Score += 1000
+		move.Reason = "FINISH"
+	}
+	return move
+}
+
 func evaluateAuthoritativeMove(game *authGame, player *authPlayer, move authoritativeBotMove, weights authoritativeBotWeights) authoritativeBotMove {
 	progress := move.ToPassed - move.FromPassed
 	if move.FromPassed == 0 {
@@ -404,6 +655,57 @@ func applyAuthoritativeDifficultyNoise(moves []authoritativeBotMove, difficulty 
 	return moves[index]
 }
 
+func selectNearEqualExpertMove(moves []authoritativeBotMove) authoritativeBotMove {
+	if len(moves) <= 1 {
+		return moves[0]
+	}
+	threshold := math.Max(30, math.Abs(moves[0].Score)*0.035)
+	near := 1
+	for near < len(moves) && moves[0].Score-moves[near].Score <= threshold {
+		near++
+	}
+	if near == 1 {
+		return moves[0]
+	}
+	weights := make([]int, near)
+	total := 0
+	for index := 0; index < near; index++ {
+		delta := moves[0].Score - moves[index].Score
+		weight := max(1, int(100-delta*2))
+		weights[index] = weight
+		total += weight
+	}
+	roll, err := secureRandomInt(total)
+	if err != nil {
+		return moves[0]
+	}
+	for index, weight := range weights {
+		if roll < weight {
+			return moves[index]
+		}
+		roll -= weight
+	}
+	return moves[0]
+}
+
+func logRejectedExpertCandidates(game *authGame, player *authPlayer, logger runtime.Logger) {
+	if logger == nil || player == nil {
+		return
+	}
+	for _, dice := range game.Rolls {
+		logger.Debug("EXPERT_DICE=%d", dice)
+		for pieceID, piece := range player.Pieces {
+			if !game.legalWithoutOwnOccupancy(pieceID, dice) {
+				continue
+			}
+			passed, position := game.destination(player, piece, dice)
+			if !game.canLandOnSquare(player.ID, pieceID, authDestination{Passed: passed, Position: position}) {
+				logger.Debug("CANDIDATE_REJECTED token=%d reason=OWN_TOKEN_COLLISION destination=%d", pieceID, position)
+			}
+		}
+	}
+}
+
 func selectAuthoritativeBotMove(game *authGame, logger runtime.Logger) (authoritativeBotMove, bool) {
 	player := game.player(game.Current)
 	legalMoves := getAuthoritativeLegalMoves(game)
@@ -413,20 +715,47 @@ func selectAuthoritativeBotMove(game *authGame, logger runtime.Logger) (authorit
 	difficulty := authoritativeBotDifficulty(player)
 	personality := authoritativeBotPersonality(player)
 	weights := authoritativeBotWeightsFor(personality)
+	if difficulty == BotExpert {
+		logRejectedExpertCandidates(game, player, logger)
+	}
 	for i := range legalMoves {
-		legalMoves[i] = evaluateAuthoritativeMove(game, player, legalMoves[i], weights)
-		jitter, err := secureRandomInt(11)
-		if err == nil {
-			legalMoves[i].Score += float64(jitter - 5)
+		switch difficulty {
+		case BotEasy:
+			legalMoves[i].Score = 0
+			legalMoves[i].Reason = "RANDOM_LEGAL"
+		case BotMedium:
+			legalMoves[i] = evaluateMediumAuthoritativeMove(legalMoves[i])
+		case BotHard:
+			legalMoves[i] = evaluateAuthoritativeMove(game, player, legalMoves[i], weights)
+		case BotExpert:
+			legalMoves[i] = evaluateExpertAuthoritativeMove(game, player, legalMoves[i])
 		}
-		if logger != nil {
+		if logger != nil && difficulty == BotExpert {
+			action := legalMoves[i].Reason
+			logger.Debug("CANDIDATE token=%d action=%s from=%d to=%d score=%.2f captureRisk=%.3f finishThreat=%.3f mobility=%.3f", legalMoves[i].PieceID, action, legalMoves[i].FromPosition, legalMoves[i].ToPosition, legalMoves[i].Score, legalMoves[i].CaptureRisk, legalMoves[i].OpponentFinish, legalMoves[i].FutureMobility)
+		} else if logger != nil {
 			logger.Debug("[BOT] difficulty=%s personality=%s token=%d dice=%d score=%.2f capture=%t safe=%t risk=%.2f", difficulty, personality, legalMoves[i].PieceID, legalMoves[i].Dice, legalMoves[i].Score, legalMoves[i].Capture, legalMoves[i].Safe, legalMoves[i].CaptureRisk)
 		}
 	}
 	sort.SliceStable(legalMoves, func(i, j int) bool { return legalMoves[i].Score > legalMoves[j].Score })
-	selected := applyAuthoritativeDifficultyNoise(legalMoves, difficulty)
+	var selected authoritativeBotMove
+	if difficulty == BotEasy {
+		index, err := secureRandomInt(len(legalMoves))
+		if err != nil {
+			index = 0
+		}
+		selected = legalMoves[index]
+	} else if difficulty == BotExpert {
+		selected = selectNearEqualExpertMove(legalMoves)
+	} else {
+		selected = applyAuthoritativeDifficultyNoise(legalMoves, difficulty)
+	}
 	if logger != nil {
-		logger.Debug("[BOT] selected token=%d dice=%d reason=%s score=%.2f", selected.PieceID, selected.Dice, selected.Reason, selected.Score)
+		if difficulty == BotExpert {
+			logger.Debug("EXPERT_SELECTED token=%d score=%.2f reason=%s", selected.PieceID, selected.Score, selected.Reason)
+		} else {
+			logger.Debug("[BOT] selected token=%d dice=%d reason=%s score=%.2f", selected.PieceID, selected.Dice, selected.Reason, selected.Score)
+		}
 	}
 	return selected, true
 }

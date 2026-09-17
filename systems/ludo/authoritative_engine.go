@@ -51,19 +51,21 @@ type authMoveData struct {
 	Capture bool `json:"captureOpponent"`
 }
 type authGame struct {
-	Players       []*authPlayer
-	Current       int
-	Rolls         []int
-	Available     int
-	Sixes         int
-	Phase         string
-	Number        int
-	Version       int
-	Deadline      int64
-	BotActionTick int64
-	Ranks         map[int]int
-	Left          map[int]bool
-	Commands      []authCommand
+	Players        []*authPlayer
+	Current        int
+	Rolls          []int
+	Available      int
+	Sixes          int
+	Phase          string
+	Number         int
+	Version        int
+	Deadline       int64
+	BotActionTick  int64
+	Ranks          map[int]int
+	Left           map[int]bool
+	Commands       []authCommand
+	HumanModels    map[int]authHumanBehavior
+	HumanBaselines map[int]authHumanBehavior
 }
 
 type authMoveResult struct {
@@ -88,7 +90,7 @@ func newAuthGame(players []*authPlayer) *authGame {
 			p.Pieces[i] = authPiece{PlayerID: p.ID, PieceID: i, Position: -1}
 		}
 	}
-	return &authGame{Players: players, Current: players[0].ID, Rolls: []int{}, Ranks: map[int]int{}, Left: map[int]bool{}, Phase: "ready"}
+	return &authGame{Players: players, Current: players[0].ID, Rolls: []int{}, Ranks: map[int]int{}, Left: map[int]bool{}, Phase: "ready", HumanModels: map[int]authHumanBehavior{}, HumanBaselines: map[int]authHumanBehavior{}}
 }
 
 func (g *authGame) clone() *authGame {
@@ -109,6 +111,14 @@ func (g *authGame) clone() *authGame {
 		cloned.Left[playerID] = left
 	}
 	cloned.Commands = append([]authCommand(nil), g.Commands...)
+	cloned.HumanModels = make(map[int]authHumanBehavior, len(g.HumanModels))
+	for playerID, model := range g.HumanModels {
+		cloned.HumanModels[playerID] = model
+	}
+	cloned.HumanBaselines = make(map[int]authHumanBehavior, len(g.HumanBaselines))
+	for playerID, model := range g.HumanBaselines {
+		cloned.HumanBaselines[playerID] = model
+	}
 	return &cloned
 }
 

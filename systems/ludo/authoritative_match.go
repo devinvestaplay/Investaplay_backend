@@ -54,6 +54,7 @@ type authMatchState struct {
 	FinishedTick  int64
 	Persisted     bool
 	EntryPaid     bool
+	LearningDirty bool
 }
 type AuthoritativeLudoMatch struct{}
 
@@ -131,6 +132,7 @@ func (m *AuthoritativeLudoMatch) MatchInit(ctx context.Context, logger runtime.L
 	}
 	state := &authMatchState{Game: newAuthGame(players), MatchID: stringFromContext(ctx, runtime.RUNTIME_CTX_MATCH_ID), Presences: map[string]runtime.Presence{}, Ready: map[string]bool{}, Responses: map[string]map[string]authCachedResponse{}, ResponseOrder: map[string][]string{}}
 	state.Arena = a
+	loadAuthoritativeHumanModels(ctx, nk, state.Game, logger)
 	for _, p := range players {
 		if p.Bot {
 			state.Ready[p.UserID] = true
@@ -469,6 +471,7 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 		}
 
 		var transitionErr error
+		beforeTransition := s.Game
 		diceResult := 0
 		moveResult := authMoveResult{PieceID: req.Piece, OldPosition: -1, NewPosition: -1}
 		switch msg.GetOpCode() {
@@ -505,6 +508,14 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 			}
 			s.rejectAction(d, logger, msg, p, req, msg.GetOpCode(), tick, transitionErr.Error(), false)
 			continue
+		}
+		if msg.GetOpCode() == authMove && !p.Bot {
+			s.Game.observeHumanMove(beforeTransition, p.ID, moveResult)
+			s.LearningDirty = true
+			if logger != nil {
+				model := s.Game.HumanModels[p.ID]
+				logger.Debug("HUMAN_PATTERN_UPDATED player=%d moves=%d captures=%d finishes=%d spawns=%d safe=%d exposed=%d", p.ID, model.Moves, model.Captures, model.Finishes, model.Spawns, model.SafeMoves, model.ExposedMoves)
+			}
 		}
 		data := s.flush(d, logger, tick, req.ID, started)
 		s.cacheResponse(user, req.ID, authBatch, data)
@@ -572,6 +583,15 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 				logger.Error("Ludo settlement pending match %s: %v", s.MatchID, err)
 			}
 		}
+		if s.LearningDirty && nk != nil {
+			if err := persistAuthoritativeHumanModels(ctx, nk, s.Game, logger); err != nil {
+				if logger != nil {
+					logger.Error("Ludo learning persistence pending match %s: %v", s.MatchID, err)
+				}
+			} else {
+				s.LearningDirty = false
+			}
+		}
 		if s.Persisted && tick-s.FinishedTick > 300*authoritativeTickRate {
 			return nil
 		}
@@ -615,6 +635,13 @@ func (s *authMatchState) sendSnapshot(d runtime.MatchDispatcher, logger runtime.
 	authSend(d, logger, authSnapshot, data, []runtime.Presence{to})
 }
 func (m *AuthoritativeLudoMatch) MatchTerminate(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, d runtime.MatchDispatcher, tick int64, state interface{}, grace int) interface{} {
+	if s, ok := state.(*authMatchState); ok && s.LearningDirty && nk != nil {
+		if err := persistAuthoritativeHumanModels(ctx, nk, s.Game, logger); err == nil {
+			s.LearningDirty = false
+		} else if logger != nil {
+			logger.Error("Ludo learning persistence failed during termination match %s: %v", s.MatchID, err)
+		}
+	}
 	return state
 }
 func (m *AuthoritativeLudoMatch) MatchSignal(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, d runtime.MatchDispatcher, tick int64, state interface{}, data string) (interface{}, string) {
