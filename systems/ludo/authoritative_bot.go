@@ -19,14 +19,13 @@ const (
 type authoritativeBotWeights struct {
 	Progress         float64
 	Capture          float64
+	Escape           float64
 	Safety           float64
 	HomeEntry        float64
 	ReachHome        float64
-	Block            float64
 	OpponentPressure float64
 	CaptureRisk      float64
 	Exposure         float64
-	BreakBlock       float64
 	Future           float64
 }
 
@@ -39,11 +38,11 @@ type authoritativeBotMove struct {
 	ToPosition       int
 	Capture          bool
 	CapturedProgress int
+	EscapesDanger    bool
 	Safe             bool
+	Spawn            bool
 	HomeEntry        bool
 	ReachHome        bool
-	CreatesBlock     bool
-	BreaksBlock      bool
 	CaptureRisk      float64
 	Pressure         float64
 	FutureValue      float64
@@ -105,15 +104,14 @@ func authoritativeBotPersonality(player *authPlayer) BotPersonality {
 func authoritativeBotWeightsFor(personality BotPersonality) authoritativeBotWeights {
 	weights := authoritativeBotWeights{
 		Progress:         12,
-		Capture:          720,
-		Safety:           260,
-		HomeEntry:        380,
-		ReachHome:        1150,
-		Block:            260,
+		Capture:          5000,
+		Escape:           1500,
+		Safety:           700,
+		HomeEntry:        1000,
+		ReachHome:        3000,
 		OpponentPressure: 120,
 		CaptureRisk:      620,
 		Exposure:         180,
-		BreakBlock:       220,
 		Future:           0.70,
 	}
 	switch personality {
@@ -124,13 +122,10 @@ func authoritativeBotWeightsFor(personality BotPersonality) authoritativeBotWeig
 		weights.CaptureRisk *= 0.82
 	case BotDefensive:
 		weights.Safety *= 1.35
-		weights.Block *= 1.30
 		weights.CaptureRisk *= 1.35
 		weights.Exposure *= 1.25
 		weights.Capture *= 0.90
 	case BotStrategic:
-		weights.Block *= 1.20
-		weights.BreakBlock *= 1.25
 		weights.Future *= 1.45
 		weights.OpponentPressure *= 1.15
 	}
@@ -176,6 +171,7 @@ func getAuthoritativeLegalMoves(game *authGame) []authoritativeBotMove {
 				FromPosition: piece.Position,
 				ToPosition:   toPosition,
 				Safe:         toPassed >= 52 || authSafe(toPosition),
+				Spawn:        piece.Passed == 0,
 				HomeEntry:    piece.Passed < 52 && toPassed >= 52,
 				ReachHome:    toPassed == 57,
 			}
@@ -185,25 +181,15 @@ func getAuthoritativeLegalMoves(game *authGame) []authoritativeBotMove {
 					move.CapturedProgress = victim.Pieces[victimPiece].Passed
 				}
 			}
-			move.CreatesBlock = authoritativeOwnPieceCount(player, toPosition, pieceID) > 0 && toPassed > 0 && toPassed < 52 && !authSafe(toPosition)
-			move.BreaksBlock = piece.Passed > 0 && piece.Passed < 52 && authoritativeOwnPieceCount(player, piece.Position, pieceID) > 0 && !authSafe(piece.Position)
 			move.CaptureRisk = calculateAuthoritativeCaptureRisk(game, player.ID, toPassed, toPosition)
+			currentRisk := calculateAuthoritativeCaptureRisk(game, player.ID, piece.Passed, piece.Position)
+			move.EscapesDanger = currentRisk > 0 && move.CaptureRisk < currentRisk
 			move.Pressure = calculateAuthoritativeOpponentPressure(game, player.ID, toPassed, toPosition)
 			move.FutureValue = predictAuthoritativeFutureValue(game, player, move)
 			moves = append(moves, move)
 		}
 	}
 	return moves
-}
-
-func authoritativeOwnPieceCount(player *authPlayer, position int, excludedPieceID int) int {
-	count := 0
-	for _, piece := range player.Pieces {
-		if piece.PieceID != excludedPieceID && piece.Passed > 0 && piece.Passed < 52 && piece.Position == position {
-			count++
-		}
-	}
-	return count
 }
 
 func calculateAuthoritativeCaptureRisk(game *authGame, playerID, passed, position int) float64 {
@@ -243,7 +229,8 @@ func authoritativeOpponentCanLand(game *authGame, player *authPlayer, piece auth
 			return false
 		}
 	}
-	return (player.Start+passed-1)%52 == targetPosition
+	destinationPosition := (player.Start + passed - 1) % 52
+	return destinationPosition == targetPosition && game.canLandOnSquare(player.ID, piece.PieceID, authDestination{Passed: passed, Position: destinationPosition})
 }
 
 func calculateAuthoritativeOpponentPressure(game *authGame, playerID, passed, position int) float64 {
@@ -312,7 +299,17 @@ func evaluateAuthoritativeMove(game *authGame, player *authPlayer, move authorit
 		move.Score += weights.Capture + float64(move.CapturedProgress)*3
 		move.Reason = "CAPTURE_HIGH_VALUE"
 	}
-	if move.Safe {
+	if move.ReachHome {
+		move.Score += weights.ReachHome
+		move.Reason = "REACH_HOME"
+	}
+	if move.EscapesDanger {
+		move.Score += weights.Escape
+		if move.Reason == "PROGRESS" {
+			move.Reason = "ESCAPE_DANGER"
+		}
+	}
+	if move.Safe && !move.Spawn {
 		move.Score += weights.Safety
 		if move.Reason == "PROGRESS" {
 			move.Reason = "SAFE_POSITION"
@@ -322,24 +319,62 @@ func evaluateAuthoritativeMove(game *authGame, player *authPlayer, move authorit
 		move.Score += weights.HomeEntry
 		move.Reason = "ENTER_HOME"
 	}
-	if move.ReachHome {
-		move.Score += weights.ReachHome
-		move.Reason = "REACH_HOME"
-	}
-	if move.CreatesBlock {
-		move.Score += weights.Block
-		if move.Reason == "PROGRESS" {
-			move.Reason = "CREATE_BLOCK"
-		}
+	if move.Spawn && move.Reason == "PROGRESS" {
+		move.Reason = "SPAWN"
 	}
 	move.Score -= move.CaptureRisk * weights.CaptureRisk
 	if move.CaptureRisk > 0 {
 		move.Score -= weights.Exposure
 	}
-	if move.BreaksBlock {
-		move.Score -= weights.BreakBlock
-	}
 	return move
+}
+
+func authoritativeBotDicePool(game *authGame, logger runtime.Logger) []int {
+	player := game.player(game.Current)
+	if player == nil {
+		return nil
+	}
+	allowed := make([]int, 0, 6)
+	for dice := 1; dice <= 6; dice++ {
+		hasMoveIgnoringOwnToken := false
+		hasLegalMove := false
+		for pieceID := range player.Pieces {
+			if game.legalWithoutOwnOccupancy(pieceID, dice) {
+				hasMoveIgnoringOwnToken = true
+			}
+			if game.legal(pieceID, dice) {
+				hasLegalMove = true
+			}
+		}
+		if hasMoveIgnoringOwnToken && !hasLegalMove {
+			if logger != nil {
+				logger.Info("BOT_DICE_REJECTED dice=%d reason=NO_VALID_DESTINATION", dice)
+			}
+			continue
+		}
+		allowed = append(allowed, dice)
+	}
+	return allowed
+}
+
+func rollAuthoritativeBotDice(game *authGame, logger runtime.Logger) (int, error) {
+	allowed := authoritativeBotDicePool(game, logger)
+	if len(allowed) == 0 {
+		dice, err := rollDice()
+		if err == nil && logger != nil {
+			logger.Info("BOT_DICE_SELECTED dice=%d", dice)
+		}
+		return dice, err
+	}
+	index, err := secureRandomInt(len(allowed))
+	if err != nil {
+		return 0, err
+	}
+	dice := allowed[index]
+	if logger != nil {
+		logger.Info("BOT_DICE_SELECTED dice=%d", dice)
+	}
+	return dice, nil
 }
 
 func applyAuthoritativeDifficultyNoise(moves []authoritativeBotMove, difficulty BotDifficulty) authoritativeBotMove {
@@ -405,7 +440,7 @@ func performAuthoritativeBotAction(game *authGame, logger runtime.Logger, tick i
 	personality := authoritativeBotPersonality(player)
 	switch game.Phase {
 	case "roll":
-		dice, err := rollDice()
+		dice, err := rollAuthoritativeBotDice(game, logger)
 		if err != nil {
 			return err
 		}

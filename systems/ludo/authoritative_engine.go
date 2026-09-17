@@ -73,6 +73,13 @@ type authMoveResult struct {
 	NewPosition int
 }
 
+type authDestination struct {
+	Passed   int
+	Position int
+}
+
+var errOwnTokenOccupied = errors.New("OWN_TOKEN_OCCUPIED")
+
 func newAuthGame(players []*authPlayer) *authGame {
 	for _, p := range players {
 		p.Start = p.ID * 13
@@ -121,6 +128,7 @@ func (g *authGame) validateCanonicalState() error {
 		if len(player.Pieces) != 4 {
 			return fmt.Errorf("player %d has %d pieces", player.ID, len(player.Pieces))
 		}
+		occupied := map[string]int{}
 		for index, piece := range player.Pieces {
 			if piece.PlayerID != player.ID || piece.PieceID != index {
 				return fmt.Errorf("player %d piece %d identity mismatch", player.ID, index)
@@ -139,6 +147,17 @@ func (g *authGame) validateCanonicalState() error {
 			}
 			if piece.Position != expectedPosition || piece.OnHomeColumn != (piece.Passed >= 52) {
 				return fmt.Errorf("player %d piece %d position is not canonical", player.ID, index)
+			}
+			if piece.Passed > 0 && piece.Passed < 57 {
+				zone := "track"
+				if piece.Passed >= 52 {
+					zone = "home"
+				}
+				key := fmt.Sprintf("%s:%d", zone, piece.Position)
+				if other, exists := occupied[key]; exists {
+					return fmt.Errorf("player %d pieces %d and %d occupy the same playable square", player.ID, other, index)
+				}
+				occupied[key] = index
 			}
 		}
 	}
@@ -210,6 +229,30 @@ func (g *authGame) destination(p *authPlayer, piece authPiece, dice int) (int, i
 	}
 	return passed, (p.Start + passed - 1) % 52
 }
+
+// canLandOnSquare is the single same-color occupancy rule used by every
+// authoritative human and bot move. Base, completed, surrendered and virtual
+// positions are not playable landing squares and are intentionally excluded.
+func (g *authGame) canLandOnSquare(playerID, movingTokenID int, destination authDestination) bool {
+	if destination.Passed <= 0 || destination.Passed >= 57 {
+		return true
+	}
+	player := g.player(playerID)
+	if player == nil {
+		return false
+	}
+	destinationInHome := destination.Passed >= 52
+	for _, piece := range player.Pieces {
+		if piece.PieceID == movingTokenID || piece.Passed <= 0 || piece.Passed >= 57 {
+			continue
+		}
+		pieceInHome := piece.Passed >= 52
+		if pieceInHome == destinationInHome && piece.Position == destination.Position {
+			return false
+		}
+	}
+	return true
+}
 func (g *authGame) blocked(id, pos int) bool {
 	if authSafe(pos) {
 		return false
@@ -246,12 +289,15 @@ func (g *authGame) victim(id, pos int) (*authPlayer, int) {
 	}
 	return nil, -1
 }
-func (g *authGame) legal(pieceID, dice int) bool {
+func (g *authGame) legalWithoutOwnOccupancy(pieceID, dice int) bool {
 	p := g.player(g.Current)
 	if p == nil || pieceID < 0 || pieceID >= 4 || dice < 1 || dice > 6 {
 		return false
 	}
 	pc := p.Pieces[pieceID]
+	if pc.Passed < 0 {
+		return false
+	}
 	if pc.Passed == 0 {
 		return dice == 6
 	}
@@ -265,6 +311,15 @@ func (g *authGame) legal(pieceID, dice int) bool {
 		}
 	}
 	return true
+}
+
+func (g *authGame) legal(pieceID, dice int) bool {
+	if !g.legalWithoutOwnOccupancy(pieceID, dice) {
+		return false
+	}
+	player := g.player(g.Current)
+	passed, position := g.destination(player, player.Pieces[pieceID], dice)
+	return g.canLandOnSquare(player.ID, pieceID, authDestination{Passed: passed, Position: position})
 }
 func (g *authGame) moves() map[int][]authMoveData {
 	result := map[int][]authMoveData{}
@@ -331,7 +386,17 @@ func (g *authGame) roll(dice int, tick int64) error {
 	return nil
 }
 func (g *authGame) move(pieceID, dice int, tick int64) error {
-	if g.Phase != "move" || !g.legal(pieceID, dice) {
+	if g.Phase != "move" {
+		return errors.New("illegal move")
+	}
+	if g.legalWithoutOwnOccupancy(pieceID, dice) {
+		player := g.player(g.Current)
+		passed, position := g.destination(player, player.Pieces[pieceID], dice)
+		if !g.canLandOnSquare(player.ID, pieceID, authDestination{Passed: passed, Position: position}) {
+			return errOwnTokenOccupied
+		}
+	}
+	if !g.legal(pieceID, dice) {
 		return errors.New("illegal move")
 	}
 	index := -1
@@ -394,8 +459,40 @@ func (g *authGame) moveRequested(pieceID, claimedDice int, tick int64) (authMove
 	if pieceID < 0 || pieceID >= 4 {
 		return authMoveResult{}, errors.New("illegal token selection")
 	}
+	if claimedDice != 0 {
+		available := false
+		for _, dice := range g.Rolls {
+			if dice == claimedDice {
+				available = true
+				break
+			}
+		}
+		if !available {
+			return authMoveResult{Dice: claimedDice, PieceID: pieceID, OldPosition: g.player(g.Current).Pieces[pieceID].Position, NewPosition: -1}, errors.New("move amount does not match authoritative dice")
+		}
+		player := g.player(g.Current)
+		if g.legalWithoutOwnOccupancy(pieceID, claimedDice) {
+			passed, position := g.destination(player, player.Pieces[pieceID], claimedDice)
+			if !g.canLandOnSquare(player.ID, pieceID, authDestination{Passed: passed, Position: position}) {
+				return authMoveResult{Dice: claimedDice, PieceID: pieceID, OldPosition: player.Pieces[pieceID].Position, NewPosition: position}, errOwnTokenOccupied
+			}
+		}
+	}
 	options := g.moves()[pieceID]
 	if len(options) == 0 {
+		player := g.player(g.Current)
+		for _, dice := range g.Rolls {
+			if claimedDice != 0 && dice != claimedDice {
+				continue
+			}
+			if !g.legalWithoutOwnOccupancy(pieceID, dice) {
+				continue
+			}
+			passed, position := g.destination(player, player.Pieces[pieceID], dice)
+			if !g.canLandOnSquare(player.ID, pieceID, authDestination{Passed: passed, Position: position}) {
+				return authMoveResult{Dice: dice, PieceID: pieceID, OldPosition: player.Pieces[pieceID].Position, NewPosition: position}, errOwnTokenOccupied
+			}
+		}
 		return authMoveResult{}, errors.New("selected token cannot move")
 	}
 	selectedDice := options[0].Dice

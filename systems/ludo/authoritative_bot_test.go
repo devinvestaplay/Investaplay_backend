@@ -144,21 +144,25 @@ func TestAuthoritativeBotPrioritizesExactFinish(t *testing.T) {
 	}
 }
 
-func TestAuthoritativeBotRecognizesBlockCreation(t *testing.T) {
+func TestAuthoritativeBotRejectsOwnTokenCollision(t *testing.T) {
 	game := authoritativeBotTestGame()
 	game.Phase = "move"
 	game.Rolls = []int{2}
 	putAuthPiece(game, 0, 0, 2)
 	putAuthPiece(game, 0, 1, 4)
 	moves := getAuthoritativeLegalMoves(game)
-	found := false
+	blockedTokenFound := false
+	validTokenFound := false
 	for _, move := range moves {
-		if move.PieceID == 0 && move.CreatesBlock {
-			found = true
+		if move.PieceID == 0 {
+			blockedTokenFound = true
+		}
+		if move.PieceID == 1 {
+			validTokenFound = true
 		}
 	}
-	if !found {
-		t.Fatalf("block-creating move not recognized: %+v", moves)
+	if blockedTokenFound || !validTokenFound {
+		t.Fatalf("bot legal moves did not enforce own-token occupancy: %+v", moves)
 	}
 }
 

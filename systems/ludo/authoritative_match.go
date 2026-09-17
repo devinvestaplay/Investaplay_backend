@@ -267,6 +267,14 @@ func (s *authMatchState) logAction(logger runtime.Logger, player *authPlayer, re
 
 func (s *authMatchState) rejectAction(d runtime.MatchDispatcher, logger runtime.Logger, presence runtime.Presence, player *authPlayer, request authRequest, opCode int64, tick int64, reason string, recoverySnapshot bool) {
 	if recoverySnapshot {
+		if stateErr := s.Game.validateCanonicalState(); stateErr != nil {
+			data, _ := json.Marshal(map[string]interface{}{"requestId": request.ID, "error": "authoritative state is invalid", "fatal": true, "version": s.Game.Version})
+			s.cacheResponse(player.UserID, request.ID, authError, data)
+			s.annotateCachedResponse(player.UserID, request.ID, request, opCode, request.Dice, request.Piece, -1, -1, false, stateErr.Error())
+			authSend(d, logger, authError, data, []runtime.Presence{presence})
+			s.logAction(logger, player, request, opCode, s.Game.Version, request.Dice, request.Piece, -1, -1, false, false, stateErr.Error())
+			return
+		}
 		data := s.snapshotData(tick, request.ID)
 		s.cacheResponse(player.UserID, request.ID, authSnapshot, data)
 		s.annotateCachedResponse(player.UserID, request.ID, request, opCode, request.Dice, request.Piece, -1, -1, false, reason)
@@ -492,6 +500,9 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 			transitionErr = errors.New("unsupported action")
 		}
 		if transitionErr != nil {
+			if errors.Is(transitionErr, errOwnTokenOccupied) && logger != nil {
+				logger.Info("MOVE_REJECTED reason=OWN_TOKEN_OCCUPIED player=%d token=%d from=%d destination=%d dice=%d", p.ID, moveResult.PieceID, moveResult.OldPosition, moveResult.NewPosition, moveResult.Dice)
+			}
 			s.rejectAction(d, logger, msg, p, req, msg.GetOpCode(), tick, transitionErr.Error(), false)
 			continue
 		}
@@ -592,6 +603,14 @@ func (s *authMatchState) snapshotData(tick int64, requestID string) []byte {
 	return data
 }
 func (s *authMatchState) sendSnapshot(d runtime.MatchDispatcher, logger runtime.Logger, to runtime.Presence, tick int64) {
+	if err := s.Game.validateCanonicalState(); err != nil {
+		if logger != nil {
+			logger.Error("authoritative Ludo refused invalid snapshot matchId=%s: %v", s.MatchID, err)
+		}
+		data, _ := json.Marshal(map[string]interface{}{"error": "authoritative state is invalid", "fatal": true, "version": s.Game.Version})
+		authSend(d, logger, authError, data, []runtime.Presence{to})
+		return
+	}
 	data := s.snapshotData(tick, "")
 	authSend(d, logger, authSnapshot, data, []runtime.Presence{to})
 }

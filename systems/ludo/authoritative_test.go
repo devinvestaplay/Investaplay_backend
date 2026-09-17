@@ -79,7 +79,7 @@ func TestAuthoritativeThreeSixesEndsTurn(t *testing.T) {
 			t.Fatal(err)
 		}
 		if i < 2 {
-			if err := g.move(i, 6, int64(i)); err != nil {
+			if err := g.move(0, 6, int64(i)); err != nil {
 				t.Fatal(err)
 			}
 		}
