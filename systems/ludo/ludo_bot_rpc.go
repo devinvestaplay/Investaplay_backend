@@ -2,7 +2,9 @@ package ludo
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"game-server/systems/arena"
 	"game-server/systems/shared_constants"
@@ -109,14 +111,13 @@ func ludoOnlineBotMatchCreate(ctx context.Context, logger runtime.Logger, db *sq
 	if err != nil {
 		return "", err
 	}
-<<<<<<< HEAD
-=======
-	if req.Protocol == 2 {
-		options.Protocol = 2
-		options.StorageKey = "v2_" + options.StorageKey
-		options.ActiveStorageKey = "v2_" + options.ActiveStorageKey
+	var protocol struct {
+		Protocol int `json:"protocol"`
 	}
->>>>>>> parent of 04e2cbf (Merge branch 'main' of github.com:devinvestaplay/Investaplay_backend)
+	_ = json.Unmarshal([]byte(payload), &protocol)
+	if protocol.Protocol == 2 {
+		return authoritativeBotCreate(ctx, nk, userID, req)
+	}
 
 	result, err := createOrGetLudoBotMatch(ctx, logger, nk, options)
 	if err != nil {
@@ -411,11 +412,16 @@ func ludoBotPlayerCount(mode string) int {
 }
 
 func ludoBotRequestStorageKey(userID string, requestID string) string {
-	return ludoBotMatchRequestStorageKey + sanitizeLudoBotIDPart(userID) + "_" + sanitizeLudoBotIDPart(requestID)
+	return hashedLudoBotRequestStorageKey(ludoBotMatchRequestStorageKey, userID, requestID)
 }
 
 func ludoOnlineBotRequestStorageKey(userID string, arenaName string, playerCount int, requestID string) string {
-	return ludoOnlineBotMatchRequestStorageKey + sanitizeLudoBotIDPart(userID) + "_" + sanitizeLudoBotIDPart(arenaName) + "_" + fmt.Sprint(playerCount) + "_" + sanitizeLudoBotIDPart(requestID)
+	return hashedLudoBotRequestStorageKey(ludoOnlineBotMatchRequestStorageKey, userID, arenaName, fmt.Sprint(playerCount), requestID)
+}
+
+func hashedLudoBotRequestStorageKey(prefix string, parts ...string) string {
+	digest := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return fmt.Sprintf("%s%x", prefix, digest)
 }
 
 func ludoUnityPlayerIDForSeat(seat int) int {
