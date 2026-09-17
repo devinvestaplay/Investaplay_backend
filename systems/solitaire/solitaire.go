@@ -21,8 +21,6 @@ const (
 	rpcIdResetupSolitaireGameConfig = "solitaire_game_config_resetup"
 	rpcIdGetSolitaireGameConfig     = "solitaire_game_config_get"
 
-	rpcIdSolitaireMatchCheckBalance = "solitaire_match_check_balance"
-	rpcIdSolitaireMatchStart        = "solitaire_match_start"
 	rpcIdSolitaireHint     = "solitaire_game_hint"
 	rpcIdSolitaireUndo     = "solitaire_game_undo"
 	rpcIdSolitaireAutoMove = "solitaire_game_auto_move"
@@ -87,12 +85,6 @@ func InitSolitaire(ctx *context.Context, logger *runtime.Logger, nk *runtime.Nak
 
 	// ----------------------------------------------------------------------------------------------------
 
-	if err := (*initializer).RegisterRpc(rpcIdSolitaireMatchCheckBalance, solitaireMatchCheckBalance); err != nil {
-		return err
-	}
-	if err := (*initializer).RegisterRpc(rpcIdSolitaireMatchStart, solitaireMatchStart); err != nil {
-		return err
-	}
 	if err := (*initializer).RegisterRpc(rpcIdSolitaireHint, hint); err != nil {
 		return err
 	}
@@ -114,42 +106,6 @@ func InitSolitaire(ctx *context.Context, logger *runtime.Logger, nk *runtime.Nak
 	}
 
 	return nil
-}
-
-func solitaireMatchCheckBalance(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-	if !ok {
-		return utils.CreateStatus(false, http.StatusUnauthorized, "invalid user"), nil
-	}
-
-	feeAmount := solitaireGameConfig.EntryFeeCost
-	if feeAmount <= 0 {
-		return utils.CreateStatus(true, http.StatusOK, "enough balance"), nil
-	}
-
-	hasBalance, err := hasEnoughCoins(ctx, nk, userID, feeAmount)
-	if err != nil {
-		return utils.CreateStatus(false, http.StatusNotFound, err.Error()), err
-	}
-	if !hasBalance {
-		return utils.CreateStatus(false, http.StatusPaymentRequired, "not enough balance"), nil
-	}
-
-	return utils.CreateStatus(true, http.StatusOK, "enough balance"), nil
-}
-
-func solitaireMatchStart(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-	if !ok {
-		return utils.CreateStatus(false, http.StatusUnauthorized, "invalid user"), nil
-	}
-
-	updatedWalletJson, err := chargeEntryFee(ctx, nk, logger, userID, solitaireGameConfig.EntryFeeCost, "solitaire")
-	if err != nil {
-		return utils.CreateStatus(false, http.StatusPaymentRequired, err.Error()), nil
-	}
-
-	return utils.CreateStatus(true, http.StatusOK, updatedWalletJson), nil
 }
 
 func getSolitaireBestStats(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -214,57 +170,6 @@ func autoMove(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime
 	}
 
 	return utils.CreateStatus(true, http.StatusOK, updatedWalletJson), nil
-}
-
-func hasEnoughCoins(ctx context.Context, nk runtime.NakamaModule, userID string, amount int) (bool, error) {
-	acc, err := nk.AccountGetId(ctx, userID)
-	if err != nil {
-		return false, fmt.Errorf("account get error: %w", err)
-	}
-
-	walletData, err := wallet.DeserializeWalletData(&acc.Wallet)
-	if err != nil {
-		return false, fmt.Errorf("wallet parse error: %w", err)
-	}
-
-	return walletData.Coins >= amount, nil
-}
-
-func chargeEntryFee(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, userID string, cost int, gameName string) (string, error) {
-	if cost <= 0 {
-		return "no fee required", nil
-	}
-
-	acc, err := nk.AccountGetId(ctx, userID)
-	if err != nil {
-		return "", fmt.Errorf("account get error: %w", err)
-	}
-
-	walletData, err := wallet.DeserializeWalletData(&acc.Wallet)
-	if err != nil {
-		return "", fmt.Errorf("wallet parse error: %w", err)
-	}
-
-	if walletData.Coins < cost {
-		return "", errors.New("insufficient balance")
-	}
-
-	changeset := map[string]int64{"coins": int64(-cost)}
-	metadata := map[string]interface{}{
-		"game":        gameName,
-		"fee":         cost,
-		"description": "match entry fee deduction",
-	}
-
-	updatedWallet, _, err := nk.WalletUpdate(ctx, userID, changeset, metadata, true)
-	if err != nil {
-		return "", err
-	}
-
-	logger.Info("Wallet updated for user %s: %+v", userID, updatedWallet)
-
-	updatedWalletJson, err := utils.SerializeObjectToString(&updatedWallet)
-	return updatedWalletJson, err
 }
 
 func chargeLifelineCost(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, userID string, cost int, lifelineName string) (string, error) {
@@ -517,7 +422,6 @@ func processSolitaireGameConfigJSON(jsonData string) error {
 }
 
 type SolitaireGameConfig struct {
-	EntryFeeCost                 int                      `json:"entry_fee_cost"`
 	RewardConfig                  SolitaireRewardConfig    `json:"reward_config"`
 	LifelineCosts                 SolitaireLifelineCosts   `json:"lifeline_costs"`
 	DrawCount                     int                      `json:"draw_count"`                         // default 1-card draw

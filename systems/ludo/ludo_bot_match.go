@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"game-server/utils"
-	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
 )
@@ -15,9 +14,6 @@ type LudoBotMatch struct{}
 func (m *LudoBotMatch) MatchInit(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, params map[string]interface{}) (interface{}, int, string) {
 	config := newLudoBotMatchConfig(ctx, params)
 	state := newLudoBotMatchState(config)
-	if intFromParam(params["protocol"], 0) == 2 {
-		initializeOnlineRules(state, params)
-	}
 	return state, ludoBotMatchTickRate, ludoBotMatchLabel(state)
 }
 
@@ -49,8 +45,6 @@ func newLudoBotMatchConfig(ctx context.Context, params map[string]interface{}) l
 
 func newLudoBotMatchState(config ludoBotMatchConfig) *LudoMatchState {
 	state := &LudoMatchState{
-		StateVersion:     1,
-		AcceptedActions:  map[string]int64{},
 		MatchID:          config.MatchID,
 		Mode:             config.Mode,
 		HumanUserID:      config.HumanUserID,
@@ -72,7 +66,6 @@ func newLudoBotMatchState(config ludoBotMatchConfig) *LudoMatchState {
 }
 
 func ludoBotMatchLabel(state *LudoMatchState) string {
-	if state.Online != nil { return `{"protocol":2}` }
 	label, _ := utils.SerializeObjectToString(&map[string]interface{}{"mode": state.Mode, "include_bot": true, "has_bot": true})
 	return label
 }
@@ -82,9 +75,8 @@ func (m *LudoBotMatch) MatchJoinAttempt(ctx context.Context, logger runtime.Logg
 	if !ok {
 		return state, false, "invalid match state"
 	}
-	if matchState.Online != nil {
-		p := matchState.Players[presence.GetUserId()]
-		return state, p != nil && !p.IsBot, "reserved players only"
+	if matchState.MatchFinished {
+		return state, false, "match finished"
 	}
 	if presence.GetUserId() != matchState.HumanUserID {
 		return state, false, "only the requesting human player can join this bot match"
@@ -111,9 +103,6 @@ func (m *LudoBotMatch) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 			adjustBotLevelsNearHuman(matchState, player.Level)
 		}
 	}
-	if matchState.Online != nil {
-		return matchState
-	}
 	if matchState.Phase == PhaseWaitingForHuman {
 		matchState.Phase = PhaseWaitingForRoll
 		broadcastMatchStart(dispatcher, matchState)
@@ -129,40 +118,18 @@ func (m *LudoBotMatch) MatchLeave(ctx context.Context, logger runtime.Logger, db
 		return state
 	}
 	for _, presence := range presences {
-		if current := matchState.Presences[presence.GetUserId()]; current != nil && current.GetSessionId() == presence.GetSessionId() {
-			delete(matchState.Presences, presence.GetUserId())
-		}
+		delete(matchState.Presences, presence.GetUserId())
 	}
 	return matchState
 }
 
 func (m *LudoBotMatch) MatchLoop(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, messages []runtime.MatchData) interface{} {
 	matchState, ok := state.(*LudoMatchState)
-	if !ok {
+	if !ok || matchState.MatchFinished {
 		return state
 	}
 	matchState.LastTick = tick
-	matchState.ServerTimeMs = time.Now().UnixMilli()
-	if matchState.Online != nil {
-		return onlineMatchLoop(dispatcher, logger, matchState, messages)
-	}
-	if matchState.MatchFinished && matchState.FinishedTick == 0 {
-		matchState.FinishedTick = tick
-	}
-	if matchState.FinishedTick > 0 && tick-matchState.FinishedTick > 300*ludoBotMatchTickRate {
-		return nil
-	}
 	for _, message := range messages {
-		if !isActiveLudoPresence(matchState, message) {
-			continue
-		}
-		if message.GetOpCode() == OpRecoverySync || message.GetOpCode() == OpRecoveryAction {
-			handleLudoRecoveryMessage(dispatcher, logger, matchState, message)
-			continue
-		}
-		if matchState.MatchFinished && message.GetOpCode() != OpStateSync {
-			continue
-		}
 		switch message.GetOpCode() {
 		case OpRollDice:
 			handleHumanRoll(dispatcher, matchState, message)
