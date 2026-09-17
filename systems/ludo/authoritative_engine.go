@@ -2,6 +2,7 @@ package ludo
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 )
 
@@ -65,6 +66,13 @@ type authGame struct {
 	Commands      []authCommand
 }
 
+type authMoveResult struct {
+	Dice        int
+	PieceID     int
+	OldPosition int
+	NewPosition int
+}
+
 func newAuthGame(players []*authPlayer) *authGame {
 	for _, p := range players {
 		p.Start = p.ID * 13
@@ -74,6 +82,75 @@ func newAuthGame(players []*authPlayer) *authGame {
 		}
 	}
 	return &authGame{Players: players, Current: players[0].ID, Rolls: []int{}, Ranks: map[int]int{}, Left: map[int]bool{}, Phase: "ready"}
+}
+
+func (g *authGame) clone() *authGame {
+	cloned := *g
+	cloned.Rolls = append([]int(nil), g.Rolls...)
+	cloned.Players = make([]*authPlayer, len(g.Players))
+	for i, player := range g.Players {
+		copyPlayer := *player
+		copyPlayer.Pieces = append([]authPiece(nil), player.Pieces...)
+		cloned.Players[i] = &copyPlayer
+	}
+	cloned.Ranks = make(map[int]int, len(g.Ranks))
+	for playerID, rank := range g.Ranks {
+		cloned.Ranks[playerID] = rank
+	}
+	cloned.Left = make(map[int]bool, len(g.Left))
+	for playerID, left := range g.Left {
+		cloned.Left[playerID] = left
+	}
+	cloned.Commands = append([]authCommand(nil), g.Commands...)
+	return &cloned
+}
+
+func (g *authGame) validateCanonicalState() error {
+	if len(g.Players) != 2 && len(g.Players) != 4 {
+		return fmt.Errorf("invalid player count %d", len(g.Players))
+	}
+	if g.player(g.Current) == nil {
+		return fmt.Errorf("current player %d does not exist", g.Current)
+	}
+	seenPlayers := map[int]bool{}
+	for _, player := range g.Players {
+		if player == nil || seenPlayers[player.ID] {
+			return errors.New("nil or duplicate player")
+		}
+		seenPlayers[player.ID] = true
+		if len(player.Pieces) != 4 {
+			return fmt.Errorf("player %d has %d pieces", player.ID, len(player.Pieces))
+		}
+		for index, piece := range player.Pieces {
+			if piece.PlayerID != player.ID || piece.PieceID != index {
+				return fmt.Errorf("player %d piece %d identity mismatch", player.ID, index)
+			}
+			if g.Left[player.ID] && piece.Passed == -100 && piece.Position == -1 {
+				continue
+			}
+			if piece.Passed < 0 || piece.Passed > 57 {
+				return fmt.Errorf("player %d piece %d has invalid progress %d", player.ID, index, piece.Passed)
+			}
+			expectedPosition := -1
+			if piece.Passed > 0 && piece.Passed < 52 {
+				expectedPosition = (player.Start + piece.Passed - 1) % 52
+			} else if piece.Passed >= 52 {
+				expectedPosition = piece.Passed - 52
+			}
+			if piece.Position != expectedPosition || piece.OnHomeColumn != (piece.Passed >= 52) {
+				return fmt.Errorf("player %d piece %d position is not canonical", player.ID, index)
+			}
+		}
+	}
+	switch g.Phase {
+	case "ready", "roll", "move", "finished":
+	default:
+		return fmt.Errorf("invalid phase %q", g.Phase)
+	}
+	if g.Phase == "move" && (len(g.Rolls) == 0 || len(g.moves()) == 0) {
+		return errors.New("move phase has no authoritative legal move")
+	}
+	return nil
 }
 func (g *authGame) player(id int) *authPlayer {
 	for _, p := range g.Players {
@@ -306,6 +383,42 @@ func (g *authGame) move(pieceID, dice int, tick int64) error {
 	}
 	g.advance(tick)
 	return nil
+}
+
+// moveRequested treats moveAmount as an optional compatibility assertion.
+// The dice and destination always come from current authoritative state.
+func (g *authGame) moveRequested(pieceID, claimedDice int, tick int64) (authMoveResult, error) {
+	if g.Phase != "move" {
+		return authMoveResult{}, errors.New("not waiting for a move")
+	}
+	if pieceID < 0 || pieceID >= 4 {
+		return authMoveResult{}, errors.New("illegal token selection")
+	}
+	options := g.moves()[pieceID]
+	if len(options) == 0 {
+		return authMoveResult{}, errors.New("selected token cannot move")
+	}
+	selectedDice := options[0].Dice
+	if claimedDice != 0 {
+		matched := false
+		for _, option := range options {
+			if option.Dice == claimedDice {
+				selectedDice = option.Dice
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return authMoveResult{}, errors.New("move amount does not match authoritative dice")
+		}
+	}
+	player := g.player(g.Current)
+	oldPosition := player.Pieces[pieceID].Position
+	_, newPosition := g.destination(player, player.Pieces[pieceID], selectedDice)
+	if err := g.move(pieceID, selectedDice, tick); err != nil {
+		return authMoveResult{}, err
+	}
+	return authMoveResult{Dice: selectedDice, PieceID: pieceID, OldPosition: oldPosition, NewPosition: newPosition}, nil
 }
 func (g *authGame) emitFinish(id int, complete bool) {
 	ranks := map[int]int{}

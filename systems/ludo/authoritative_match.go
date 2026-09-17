@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"game-server/systems/arena"
 	"sort"
 	"strconv"
@@ -28,6 +29,18 @@ type authReply struct {
 	ProcessingMicros int64         `json:"processingMicros"`
 	RemainingMs      int64         `json:"remainingMs"`
 }
+type authCachedResponse struct {
+	OpCode      int64
+	Data        []byte
+	Action      int64
+	Client      int
+	Dice        int
+	PieceID     int
+	OldPosition int
+	NewPosition int
+	Accepted    bool
+	Reason      string
+}
 type authMatchState struct {
 	Arena         arena.LudoArenaItemData
 	History       [][]byte
@@ -35,7 +48,7 @@ type authMatchState struct {
 	MatchID       string
 	Presences     map[string]runtime.Presence
 	Ready         map[string]bool
-	Responses     map[string]map[string][]byte
+	Responses     map[string]map[string]authCachedResponse
 	ResponseOrder map[string][]string
 	CreatedTick   int64
 	FinishedTick  int64
@@ -43,6 +56,8 @@ type authMatchState struct {
 	EntryPaid     bool
 }
 type AuthoritativeLudoMatch struct{}
+
+const authResponseCacheLimit = 64
 
 func registerAuthoritativeLudo(initializer runtime.Initializer) error {
 	if err := initializer.RegisterRpc("ludo_authoritative_create", authoritativeCreate); err != nil {
@@ -114,7 +129,7 @@ func (m *AuthoritativeLudoMatch) MatchInit(ctx context.Context, logger runtime.L
 	if err != nil {
 		return nil, 0, ""
 	}
-	state := &authMatchState{Game: newAuthGame(players), MatchID: stringFromContext(ctx, runtime.RUNTIME_CTX_MATCH_ID), Presences: map[string]runtime.Presence{}, Ready: map[string]bool{}, Responses: map[string]map[string][]byte{}, ResponseOrder: map[string][]string{}}
+	state := &authMatchState{Game: newAuthGame(players), MatchID: stringFromContext(ctx, runtime.RUNTIME_CTX_MATCH_ID), Presences: map[string]runtime.Presence{}, Ready: map[string]bool{}, Responses: map[string]map[string]authCachedResponse{}, ResponseOrder: map[string][]string{}}
 	state.Arena = a
 	for _, p := range players {
 		if p.Bot {
@@ -163,8 +178,138 @@ func (m *AuthoritativeLudoMatch) MatchLeave(ctx context.Context, logger runtime.
 }
 func authSend(d runtime.MatchDispatcher, logger runtime.Logger, op int64, data []byte, to []runtime.Presence) {
 	if err := d.BroadcastMessage(op, data, to, nil, true); err != nil {
-		logger.Error("authoritative Ludo broadcast: %v", err)
+		if logger != nil {
+			logger.Error("authoritative Ludo broadcast: %v", err)
+		}
 	}
+}
+
+func (s *authMatchState) cacheResponse(userID, requestID string, opCode int64, data []byte) {
+	if s.Responses == nil {
+		s.Responses = map[string]map[string]authCachedResponse{}
+	}
+	if s.ResponseOrder == nil {
+		s.ResponseOrder = map[string][]string{}
+	}
+	if s.Responses[userID] == nil {
+		s.Responses[userID] = map[string]authCachedResponse{}
+	}
+	if _, exists := s.Responses[userID][requestID]; exists {
+		return
+	}
+	s.Responses[userID][requestID] = authCachedResponse{OpCode: opCode, Data: append([]byte(nil), data...)}
+	s.ResponseOrder[userID] = append(s.ResponseOrder[userID], requestID)
+	if len(s.ResponseOrder[userID]) > authResponseCacheLimit {
+		oldest := s.ResponseOrder[userID][0]
+		s.ResponseOrder[userID] = s.ResponseOrder[userID][1:]
+		delete(s.Responses[userID], oldest)
+	}
+}
+
+func (s *authMatchState) annotateCachedResponse(userID, requestID string, request authRequest, action int64, dice, pieceID, oldPosition, newPosition int, accepted bool, reason string) {
+	cached, found := s.Responses[userID][requestID]
+	if !found {
+		return
+	}
+	cached.Action = action
+	cached.Client = request.Version
+	cached.Dice = dice
+	cached.PieceID = pieceID
+	cached.OldPosition = oldPosition
+	cached.NewPosition = newPosition
+	cached.Accepted = accepted
+	cached.Reason = reason
+	s.Responses[userID][requestID] = cached
+}
+
+func (s *authMatchState) applyTransition(apply func(*authGame) error) error {
+	if err := s.Game.validateCanonicalState(); err != nil {
+		return fmt.Errorf("invalid authoritative state before action: %w", err)
+	}
+	next := s.Game.clone()
+	if err := apply(next); err != nil {
+		return err
+	}
+	if err := next.validateCanonicalState(); err != nil {
+		return fmt.Errorf("invalid authoritative state after action: %w", err)
+	}
+	s.Game = next
+	return nil
+}
+
+func authActionName(opCode int64) string {
+	switch opCode {
+	case authRoll:
+		return "roll"
+	case authMove:
+		return "move"
+	case authSync:
+		return "resync"
+	case authSurrender:
+		return "surrender"
+	default:
+		return fmt.Sprintf("opcode_%d", opCode)
+	}
+}
+
+func (s *authMatchState) logAction(logger runtime.Logger, player *authPlayer, request authRequest, opCode int64, serverVersion, dice, pieceID, oldPosition, newPosition int, accepted, duplicate bool, reason string) {
+	if logger == nil {
+		return
+	}
+	userID := ""
+	playerID := -1
+	if player != nil {
+		userID = player.UserID
+		playerID = player.ID
+	}
+	logger.Info("[LudoAction] matchId=%s userId=%s playerId=%d requestId=%s clientVersion=%d serverVersion=%d action=%s dice=%d pieceId=%d oldPosition=%d newPosition=%d accepted=%t rejected=%t rejectionReason=%q duplicate=%t", s.MatchID, userID, playerID, request.ID, request.Version, serverVersion, authActionName(opCode), dice, pieceID, oldPosition, newPosition, accepted, !accepted, reason, duplicate)
+}
+
+func (s *authMatchState) rejectAction(d runtime.MatchDispatcher, logger runtime.Logger, presence runtime.Presence, player *authPlayer, request authRequest, opCode int64, tick int64, reason string, recoverySnapshot bool) {
+	if recoverySnapshot {
+		data := s.snapshotData(tick, request.ID)
+		s.cacheResponse(player.UserID, request.ID, authSnapshot, data)
+		s.annotateCachedResponse(player.UserID, request.ID, request, opCode, request.Dice, request.Piece, -1, -1, false, reason)
+		authSend(d, logger, authSnapshot, data, []runtime.Presence{presence})
+		s.logAction(logger, player, request, opCode, s.Game.Version, request.Dice, request.Piece, -1, -1, false, false, reason)
+		return
+	}
+	data, _ := json.Marshal(map[string]interface{}{"requestId": request.ID, "error": reason, "version": s.Game.Version})
+	s.cacheResponse(player.UserID, request.ID, authError, data)
+	s.annotateCachedResponse(player.UserID, request.ID, request, opCode, request.Dice, request.Piece, -1, -1, false, reason)
+	authSend(d, logger, authError, data, []runtime.Presence{presence})
+	s.logAction(logger, player, request, opCode, s.Game.Version, request.Dice, request.Piece, -1, -1, false, false, reason)
+}
+
+func authTransitionDetails(before, after *authGame, playerID int) (dice, pieceID, oldPosition, newPosition int) {
+	pieceID, oldPosition, newPosition = -1, -1, -1
+	if before.Phase == "roll" {
+		for _, command := range after.Commands[len(before.Commands):] {
+			if command["commandName"] == "RollDice" {
+				dice, _ = command["diceValue"].(int)
+				return dice, pieceID, oldPosition, newPosition
+			}
+		}
+		return dice, pieceID, oldPosition, newPosition
+	}
+	oldPlayer := before.player(playerID)
+	newPlayer := after.player(playerID)
+	if oldPlayer == nil || newPlayer == nil {
+		return dice, pieceID, oldPosition, newPosition
+	}
+	for index := range oldPlayer.Pieces {
+		if oldPlayer.Pieces[index].Passed != newPlayer.Pieces[index].Passed || oldPlayer.Pieces[index].Position != newPlayer.Pieces[index].Position {
+			pieceID = index
+			oldPosition = oldPlayer.Pieces[index].Position
+			newPosition = newPlayer.Pieces[index].Position
+			dice = newPlayer.Pieces[index].Passed - oldPlayer.Pieces[index].Passed
+			if oldPlayer.Pieces[index].Passed == 0 && newPlayer.Pieces[index].Passed == 1 {
+				dice = 6
+			}
+			return dice, pieceID, oldPosition, newPosition
+		}
+	}
+	return dice, pieceID, oldPosition, newPosition
 }
 func (s *authMatchState) flush(d runtime.MatchDispatcher, logger runtime.Logger, tick int64, id string, started time.Time) []byte {
 	s.Game.Version++
@@ -219,6 +364,10 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 				AfterVersion *int `json:"afterVersion"`
 			}
 			_ = json.Unmarshal(msg.GetData(), &sync)
+			clientVersion := s.Game.Version
+			if sync.AfterVersion != nil {
+				clientVersion = *sync.AfterVersion
+			}
 			if sync.AfterVersion != nil && *sync.AfterVersion >= 0 && *sync.AfterVersion < s.Game.Version {
 				for _, packet := range s.History[*sync.AfterVersion:] {
 					var replay authReply
@@ -233,6 +382,7 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 			} else {
 				s.sendSnapshot(d, logger, msg, tick)
 			}
+			s.logAction(logger, p, authRequest{Version: clientVersion}, authSync, s.Game.Version, 0, -1, -1, -1, true, false, "")
 			continue
 		}
 		if msg.GetOpCode() == authReady {
@@ -263,90 +413,143 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 			continue
 		}
 		var req authRequest
-		if len(msg.GetData()) > 1024 || json.Unmarshal(msg.GetData(), &req) != nil || len(req.ID) == 0 || len(req.ID) > 64 {
+		if len(msg.GetData()) > 1024 || json.Unmarshal(msg.GetData(), &req) != nil {
+			data, _ := json.Marshal(map[string]interface{}{"error": "invalid action payload", "version": s.Game.Version})
+			authSend(d, logger, authError, data, []runtime.Presence{msg})
+			s.logAction(logger, p, req, msg.GetOpCode(), s.Game.Version, 0, req.Piece, -1, -1, false, false, "invalid action payload")
 			continue
 		}
-		if cached := s.Responses[user][req.ID]; cached != nil {
-			authSend(d, logger, authBatch, cached, []runtime.Presence{msg})
+		if len(req.ID) == 0 || len(req.ID) > 64 {
+			data, _ := json.Marshal(map[string]interface{}{"requestId": req.ID, "error": "requestId is required and must not exceed 64 characters", "version": s.Game.Version})
+			authSend(d, logger, authError, data, []runtime.Presence{msg})
+			s.logAction(logger, p, req, msg.GetOpCode(), s.Game.Version, 0, req.Piece, -1, -1, false, false, "invalid requestId")
 			continue
 		}
-		var err error
-		if req.Version != s.Game.Version {
-			err = errors.New("stale match version")
-		} else if s.Game.Phase == "ready" {
-			err = errors.New("match has not started")
-		} else if msg.GetOpCode() == authSurrender && (s.Game.Phase == "finished" || s.Game.Ranks[p.ID] > 0) {
+		if cached, found := s.Responses[user][req.ID]; found {
+			authSend(d, logger, cached.OpCode, cached.Data, []runtime.Presence{msg})
+			action := cached.Action
+			if action == 0 {
+				action = msg.GetOpCode()
+			}
+			cachedRequest := authRequest{ID: req.ID, Version: cached.Client, Piece: cached.PieceID}
+			s.logAction(logger, p, cachedRequest, action, s.Game.Version, cached.Dice, cached.PieceID, cached.OldPosition, cached.NewPosition, cached.Accepted, true, cached.Reason)
+			continue
+		}
+		if req.Version < s.Game.Version {
+			s.rejectAction(d, logger, msg, p, req, msg.GetOpCode(), tick, "stale match version", true)
+			continue
+		}
+		if req.Version > s.Game.Version {
+			s.rejectAction(d, logger, msg, p, req, msg.GetOpCode(), tick, "future match version", true)
+			continue
+		}
+		if s.Game.Phase == "ready" {
+			s.rejectAction(d, logger, msg, p, req, msg.GetOpCode(), tick, "match has not started", false)
+			continue
+		}
+		if msg.GetOpCode() == authSurrender && (s.Game.Phase == "finished" || s.Game.Ranks[p.ID] > 0) {
 			data, _ := json.Marshal(authReply{Version: s.Game.Version, Commands: []authCommand{}, Phase: s.Game.Phase, RequestID: req.ID})
 			authSend(d, logger, authBatch, data, []runtime.Presence{msg})
+			s.cacheResponse(user, req.ID, authBatch, data)
+			s.annotateCachedResponse(user, req.ID, req, msg.GetOpCode(), 0, -1, -1, -1, true, "")
+			s.logAction(logger, p, req, msg.GetOpCode(), s.Game.Version, 0, -1, -1, -1, true, false, "")
 			continue
-		} else if msg.GetOpCode() == authSurrender {
-			s.Game.surrender(p.ID, tick)
-		} else if p.ID != s.Game.Current || s.Game.Left[p.ID] || s.Game.Phase == "finished" {
-			err = errors.New("not your turn")
-		} else {
-			switch msg.GetOpCode() {
-			case authRoll:
-				if s.Game.Phase != "roll" {
-					err = errors.New("not waiting for roll")
-				} else {
-					var dice int
-					dice, err = rollDice()
-					if err == nil {
-						err = s.Game.roll(dice, tick)
-					}
-				}
-			case authMove:
-				err = s.Game.move(req.Piece, req.Dice, tick)
-			default:
-				err = errors.New("unsupported action")
-			}
 		}
-		if err != nil {
-			data, _ := json.Marshal(map[string]interface{}{"requestId": req.ID, "error": err.Error(), "version": s.Game.Version})
-			authSend(d, logger, authError, data, []runtime.Presence{msg})
+		if msg.GetOpCode() != authSurrender && (p.ID != s.Game.Current || s.Game.Left[p.ID] || s.Game.Phase == "finished") {
+			s.rejectAction(d, logger, msg, p, req, msg.GetOpCode(), tick, "not your turn", false)
+			continue
+		}
+
+		var transitionErr error
+		diceResult := 0
+		moveResult := authMoveResult{PieceID: req.Piece, OldPosition: -1, NewPosition: -1}
+		switch msg.GetOpCode() {
+		case authSurrender:
+			transitionErr = s.applyTransition(func(game *authGame) error {
+				game.surrender(p.ID, tick)
+				return nil
+			})
+		case authRoll:
+			transitionErr = s.applyTransition(func(game *authGame) error {
+				if game.Phase != "roll" {
+					return errors.New("not waiting for a roll")
+				}
+				var err error
+				diceResult, err = rollDice()
+				if err != nil {
+					return err
+				}
+				return game.roll(diceResult, tick)
+			})
+		case authMove:
+			transitionErr = s.applyTransition(func(game *authGame) error {
+				var err error
+				moveResult, err = game.moveRequested(req.Piece, req.Dice, tick)
+				return err
+			})
+			diceResult = moveResult.Dice
+		default:
+			transitionErr = errors.New("unsupported action")
+		}
+		if transitionErr != nil {
+			s.rejectAction(d, logger, msg, p, req, msg.GetOpCode(), tick, transitionErr.Error(), false)
 			continue
 		}
 		data := s.flush(d, logger, tick, req.ID, started)
-		if s.Responses[user] == nil {
-			s.Responses[user] = map[string][]byte{}
-		}
-		s.Responses[user][req.ID] = data
-		s.ResponseOrder[user] = append(s.ResponseOrder[user], req.ID)
-		if len(s.ResponseOrder[user]) > 64 {
-			old := s.ResponseOrder[user][0]
-			s.ResponseOrder[user] = s.ResponseOrder[user][1:]
-			delete(s.Responses[user], old)
-		}
+		s.cacheResponse(user, req.ID, authBatch, data)
+		s.annotateCachedResponse(user, req.ID, req, msg.GetOpCode(), diceResult, moveResult.PieceID, moveResult.OldPosition, moveResult.NewPosition, true, "")
+		s.logAction(logger, p, req, msg.GetOpCode(), s.Game.Version, diceResult, moveResult.PieceID, moveResult.OldPosition, moveResult.NewPosition, true, false, "")
 	}
 	if s.Game.Phase != "ready" && s.Game.Phase != "finished" {
 		current := s.Game.player(s.Game.Current)
 		if current != nil && current.Bot && s.Game.BotActionTick > 0 && tick >= s.Game.BotActionTick {
 			started := time.Now()
-			s.Game.BotActionTick = 0
-			if err := performAuthoritativeBotAction(s.Game, logger, tick); err != nil {
+			before := s.Game
+			request := authRequest{ID: fmt.Sprintf("bot-%d-%d", tick, before.Version), Version: before.Version, Piece: -1}
+			opCode := authRoll
+			if before.Phase == "move" {
+				opCode = authMove
+			}
+			err := s.applyTransition(func(game *authGame) error {
+				game.BotActionTick = 0
+				return performAuthoritativeBotAction(game, logger, tick)
+			})
+			if err != nil {
 				if logger != nil {
 					logger.Error("authoritative Ludo bot action: %v", err)
 				}
+				s.logAction(logger, current, request, opCode, before.Version, 0, -1, -1, -1, false, false, err.Error())
 			} else {
+				dice, pieceID, oldPosition, newPosition := authTransitionDetails(before, s.Game, current.ID)
 				s.flush(d, logger, tick, "", started)
+				s.logAction(logger, current, request, opCode, s.Game.Version, dice, pieceID, oldPosition, newPosition, true, false, "")
 			}
 		}
 	}
 	if s.Game.Phase != "ready" && s.Game.Phase != "finished" && tick >= s.Game.Deadline {
 		started := time.Now()
 		current := s.Game.player(s.Game.Current)
-		var err error
-		if current != nil && current.Bot {
-			err = performAuthoritativeBotAction(s.Game, logger, tick)
-		} else {
-			err = s.Game.timeout(tick)
+		before := s.Game
+		request := authRequest{ID: fmt.Sprintf("timeout-%d-%d", tick, before.Version), Version: before.Version, Piece: -1}
+		opCode := authRoll
+		if before.Phase == "move" {
+			opCode = authMove
 		}
+		err := s.applyTransition(func(game *authGame) error {
+			if current != nil && current.Bot {
+				return performAuthoritativeBotAction(game, logger, tick)
+			}
+			return game.timeout(tick)
+		})
 		if err != nil {
 			if logger != nil {
 				logger.Error("authoritative Ludo timeout: %v", err)
 			}
+			s.logAction(logger, current, request, opCode, before.Version, 0, -1, -1, -1, false, false, err.Error())
 		} else {
+			dice, pieceID, oldPosition, newPosition := authTransitionDetails(before, s.Game, current.ID)
 			s.flush(d, logger, tick, "", started)
+			s.logAction(logger, current, request, opCode, s.Game.Version, dice, pieceID, oldPosition, newPosition, true, false, "")
 		}
 	}
 	if s.Game.Phase == "finished" {
@@ -364,7 +567,7 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 	}
 	return s
 }
-func (s *authMatchState) sendSnapshot(d runtime.MatchDispatcher, logger runtime.Logger, to runtime.Presence, tick int64) {
+func (s *authMatchState) snapshotData(tick int64, requestID string) []byte {
 	states := map[int]int{}
 	profiles := map[int]interface{}{}
 	for _, p := range s.Game.Players {
@@ -381,7 +584,15 @@ func (s *authMatchState) sendSnapshot(d runtime.MatchDispatcher, logger runtime.
 		profiles[p.ID] = p.Profile
 	}
 	rejoin := map[string]interface{}{"players": s.Game.Players, "currentPlayer": s.Game.Current, "currentPlayerDiceRolls": s.Game.Rolls, "currentPlayerMaxRolled": s.Game.Sixes, "currentPlayerRollsAvaiable": s.Game.Available, "arenaType": 0, "isWatingRollDice": s.Game.Phase == "roll", "isWaitingMove": s.Game.Phase == "move", "matchConfig": map[string]interface{}{"PieceFinishToWinCount": 4, "isQuick": false}, "playerRanking": s.Game.Ranks, "playerStates": states, "allPlayerUserSmallData": profiles}
-	data, _ := json.Marshal(map[string]interface{}{"version": s.Game.Version, "commandNumber": s.Game.Number, "phase": s.Game.Phase, "state": rejoin, "moves": s.Game.moves(), "remainingMs": max(int64(0), s.Game.Deadline-tick) * 1000 / authoritativeTickRate})
+	payload := map[string]interface{}{"version": s.Game.Version, "commandNumber": s.Game.Number, "phase": s.Game.Phase, "state": rejoin, "moves": s.Game.moves(), "remainingMs": max(int64(0), s.Game.Deadline-tick) * 1000 / authoritativeTickRate}
+	if requestID != "" {
+		payload["requestId"] = requestID
+	}
+	data, _ := json.Marshal(payload)
+	return data
+}
+func (s *authMatchState) sendSnapshot(d runtime.MatchDispatcher, logger runtime.Logger, to runtime.Presence, tick int64) {
+	data := s.snapshotData(tick, "")
 	authSend(d, logger, authSnapshot, data, []runtime.Presence{to})
 }
 func (m *AuthoritativeLudoMatch) MatchTerminate(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, d runtime.MatchDispatcher, tick int64, state interface{}, grace int) interface{} {

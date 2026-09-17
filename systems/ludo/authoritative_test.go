@@ -226,7 +226,7 @@ func (d *authTestDispatcher) BroadcastMessage(op int64, data []byte, to []runtim
 func authTestState() *authMatchState {
 	g := authTestGame(2)
 	g.Version = 1
-	return &authMatchState{Game: g, Presences: map[string]runtime.Presence{"0": relayTestPresence{user: "0", session: "s0"}, "2": relayTestPresence{user: "2", session: "s2"}}, Ready: map[string]bool{}, Responses: map[string]map[string][]byte{}, ResponseOrder: map[string][]string{}}
+	return &authMatchState{Game: g, Presences: map[string]runtime.Presence{"0": relayTestPresence{user: "0", session: "s0"}, "2": relayTestPresence{user: "2", session: "s2"}}, Ready: map[string]bool{}, Responses: map[string]map[string]authCachedResponse{}, ResponseOrder: map[string][]string{}}
 }
 func authTestIntent(user, session, id string, version int, op int64) runtime.MatchData {
 	data, _ := json.Marshal(authRequest{ID: id, Version: version, Piece: 0, Dice: 6})
@@ -252,7 +252,8 @@ func TestAuthoritativeRejectsWrongTurnStaleAndSpoofedSession(t *testing.T) {
 		name, user, session string
 		version             int
 		reply               bool
-	}{{"wrong turn", "2", "s2", 1, true}, {"stale", "0", "s0", 0, true}, {"session spoof", "0", "fake", 1, false}, {"non member", "9", "s9", 1, false}} {
+		recovery            bool
+	}{{"wrong turn", "2", "s2", 1, true, false}, {"stale", "0", "s0", 0, true, true}, {"session spoof", "0", "fake", 1, false, false}, {"non member", "9", "s9", 1, false, false}} {
 		t.Run(test.name, func(t *testing.T) {
 			s := authTestState()
 			d := &authTestDispatcher{}
@@ -262,7 +263,11 @@ func TestAuthoritativeRejectsWrongTurnStaleAndSpoofedSession(t *testing.T) {
 			if string(before) != string(after) {
 				t.Fatal("invalid request changed state")
 			}
-			if test.reply && (len(d.ops) != 1 || d.ops[0] != authError) {
+			expectedOpcode := authError
+			if test.recovery {
+				expectedOpcode = authSnapshot
+			}
+			if test.reply && (len(d.ops) != 1 || d.ops[0] != expectedOpcode) {
 				t.Fatal("missing rejection")
 			}
 			if !test.reply && len(d.ops) != 0 {
