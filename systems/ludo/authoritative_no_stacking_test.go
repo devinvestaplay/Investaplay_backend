@@ -144,7 +144,7 @@ func TestOpponentDestinationStillCaptures(t *testing.T) {
 	}
 }
 
-func TestRollSixCannotSpawnOntoOwnToken(t *testing.T) {
+func TestRollSixCanSpawnOntoOwnTokenOnSafeStart(t *testing.T) {
 	game := authTestGame(2)
 	putAuthPiece(game, 0, 0, 1)
 	game.Phase = "move"
@@ -154,9 +154,26 @@ func TestRollSixCannotSpawnOntoOwnToken(t *testing.T) {
 		t.Fatal("existing token should retain its valid six move")
 	}
 	for pieceID := 1; pieceID < 4; pieceID++ {
-		if _, valid := moves[pieceID]; valid {
-			t.Fatalf("base token %d could spawn onto own start token", pieceID)
+		if _, valid := moves[pieceID]; !valid {
+			t.Fatalf("base token %d could not stack on its safe start square", pieceID)
 		}
+	}
+}
+
+func TestSameColorTokensCanStackOnSafeSharedSquare(t *testing.T) {
+	game := authTestGame(2)
+	putAuthPiece(game, 0, 0, 9) // Player 0 global position 8 is safe.
+	putAuthPiece(game, 0, 1, 7)
+	game.Phase = "move"
+	game.Rolls = []int{2}
+	if !game.legal(1, 2) {
+		t.Fatal("same-color landing on a safe shared square was rejected")
+	}
+	if err := game.move(1, 2, 10); err != nil {
+		t.Fatalf("same-color safe-square stack failed: %v", err)
+	}
+	if err := game.validateCanonicalState(); err != nil {
+		t.Fatalf("canonical state rejected safe-square stack: %v", err)
 	}
 }
 

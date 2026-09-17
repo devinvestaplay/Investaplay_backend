@@ -165,7 +165,9 @@ func (g *authGame) validateCanonicalState() error {
 				}
 				key := fmt.Sprintf("%s:%d", zone, piece.Position)
 				if other, exists := occupied[key]; exists {
-					return fmt.Errorf("player %d pieces %d and %d occupy the same playable square", player.ID, other, index)
+					if zone != "track" || !authSafe(piece.Position) {
+						return fmt.Errorf("player %d pieces %d and %d occupy the same non-safe playable square", player.ID, other, index)
+					}
 				}
 				occupied[key] = index
 			}
@@ -241,10 +243,14 @@ func (g *authGame) destination(p *authPlayer, piece authPiece, dice int) (int, i
 }
 
 // canLandOnSquare is the single same-color occupancy rule used by every
-// authoritative human and bot move. Base, completed, surrendered and virtual
+// authoritative human and bot move. Shared-track safe squares may contain
+// multiple same-color tokens. Base, completed, surrendered and virtual
 // positions are not playable landing squares and are intentionally excluded.
 func (g *authGame) canLandOnSquare(playerID, movingTokenID int, destination authDestination) bool {
 	if destination.Passed <= 0 || destination.Passed >= 57 {
+		return true
+	}
+	if destination.Passed < 52 && authSafe(destination.Position) {
 		return true
 	}
 	player := g.player(playerID)
