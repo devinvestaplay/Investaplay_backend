@@ -109,6 +109,14 @@ func ludoOnlineBotMatchCreate(ctx context.Context, logger runtime.Logger, db *sq
 	if err != nil {
 		return "", err
 	}
+<<<<<<< HEAD
+=======
+	if req.Protocol == 2 {
+		options.Protocol = 2
+		options.StorageKey = "v2_" + options.StorageKey
+		options.ActiveStorageKey = "v2_" + options.ActiveStorageKey
+	}
+>>>>>>> parent of 04e2cbf (Merge branch 'main' of github.com:devinvestaplay/Investaplay_backend)
 
 	result, err := createOrGetLudoBotMatch(ctx, logger, nk, options)
 	if err != nil {

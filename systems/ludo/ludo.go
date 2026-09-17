@@ -36,6 +36,11 @@ const (
 )
 
 func InitLudo(ctx *context.Context, logger *runtime.Logger, nk *runtime.NakamaModule, initializer *runtime.Initializer) error {
+<<<<<<< HEAD
+=======
+	if err := (*initializer).RegisterMatchmakerMatched(ludoAuthoritativeMatched); err != nil { return err }
+	if err := (*initializer).RegisterRpc("ludo_authoritative_party_create", ludoCreatePartyMatch); err != nil { return err }
+>>>>>>> parent of 04e2cbf (Merge branch 'main' of github.com:devinvestaplay/Investaplay_backend)
 
 	if err := (*initializer).RegisterMatch(ludoCustomRoomMatchModule, func(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule) (runtime.Match, error) {
 		return &LudoCustomRoomMatch{}, nil

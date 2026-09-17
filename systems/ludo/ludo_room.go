@@ -407,6 +407,11 @@ func ludoRoomToResponse(room LudoRoomData) LudoRoomResponse {
 type LudoCustomRoomMatch struct{}
 
 type LudoCustomRoomMatchState struct {
+<<<<<<< HEAD
+=======
+	Protocol        int                         `json:"protocol,omitempty"`
+	Game            *LudoMatchState             `json:"-"`
+>>>>>>> parent of 04e2cbf (Merge branch 'main' of github.com:devinvestaplay/Investaplay_backend)
 	RoomCode        string                      `json:"room_code"`
 	ArenaName       string                      `json:"arena_name"`
 	Mode            arena.ArenaMode             `json:"mode"`
@@ -420,6 +425,10 @@ type LudoCustomRoomMatchState struct {
 
 func (m *LudoCustomRoomMatch) MatchInit(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, params map[string]interface{}) (interface{}, int, string) {
 	state := &LudoCustomRoomMatchState{
+<<<<<<< HEAD
+=======
+		Protocol:   intFromParam(params["protocol"], 0),
+>>>>>>> parent of 04e2cbf (Merge branch 'main' of github.com:devinvestaplay/Investaplay_backend)
 		RoomCode:   fmt.Sprint(params["room_code"]),
 		ArenaName:  fmt.Sprint(params["arena_name"]),
 		Mode:       arena.ArenaMode(fmt.Sprint(params["mode"])),
@@ -485,6 +494,15 @@ func (m *LudoCustomRoomMatch) MatchLoop(ctx context.Context, logger runtime.Logg
 	if !ok {
 		return state
 	}
+<<<<<<< HEAD
+=======
+	if matchState.Game != nil {
+		matchState.Game.LastTick = tick
+		matchState.Game.ServerTimeMs = time.Now().UnixMilli()
+		if onlineMatchLoop(dispatcher, logger, matchState.Game, messages) == nil { return nil }
+		return matchState
+	}
+>>>>>>> parent of 04e2cbf (Merge branch 'main' of github.com:devinvestaplay/Investaplay_backend)
 	for _, message := range messages {
 		if matchState.Status != ludoCustomRoomStatusPlaying {
 			if message.GetOpCode() != ludoCustomRoomStartOpCode || message.GetUserId() != matchState.HostID {
