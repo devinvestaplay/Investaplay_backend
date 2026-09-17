@@ -1,7 +1,5 @@
 # Unity Ludo Custom Room Start Flow
 
-> The current implementation uses [Ludo protocol 2](LUDO_AUTHORITATIVE_V2.md). Its server-authoritative gameplay and atomic entry-fee flow supersede the legacy start/payment details below.
-
 This guide explains how Unity should start a Ludo custom room match after the backend start-signal fix.
 
 ## Summary

@@ -3,7 +3,6 @@ package ludo
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"game-server/systems/arena"
 	"game-server/systems/shared_constants"
@@ -110,19 +109,10 @@ func ludoOnlineBotMatchCreate(ctx context.Context, logger runtime.Logger, db *sq
 	if err != nil {
 		return "", err
 	}
-var protocol struct {
-		Protocol int `json:"protocol"`
-	}
-	_ = json.Unmarshal([]byte(payload), &protocol)
-	if protocol.Protocol == 2 {
-		return authoritativeBotCreate(ctx, nk, userID, req)
-	}
 	if req.Protocol == 2 {
 		options.Protocol = 2
 		options.StorageKey = "v2_" + options.StorageKey
 		options.ActiveStorageKey = "v2_" + options.ActiveStorageKey
-	}
-
 	}
 
 	result, err := createOrGetLudoBotMatch(ctx, logger, nk, options)
