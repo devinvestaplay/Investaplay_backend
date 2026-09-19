@@ -7,7 +7,8 @@ import (
 )
 
 // Protocol 2 uses Unity's 52-cell board and passed=0 (base), 1..51
-// (shared track), 52..57 (private home lane). Dice are uniform 1..6.
+// (shared track), 52..57 (private home lane). Dice are uniform across the
+// values that do not create a same-color collision on a non-safe square.
 const authoritativeModule = "ludo_authoritative_v2"
 const authoritativeTickRate = 30
 const authoritativeTurnTicks = 15 * authoritativeTickRate
@@ -81,6 +82,7 @@ type authDestination struct {
 }
 
 var errOwnTokenOccupied = errors.New("OWN_TOKEN_OCCUPIED")
+var errNoAllowedDiceValues = errors.New("NO_ALLOWED_DICE_VALUES")
 
 func newAuthGame(players []*authPlayer) *authGame {
 	for _, p := range players {
@@ -337,6 +339,50 @@ func (g *authGame) legal(pieceID, dice int) bool {
 	passed, position := g.destination(player, player.Pieces[pieceID], dice)
 	return g.canLandOnSquare(player.ID, pieceID, authDestination{Passed: passed, Position: position})
 }
+
+// authoritativeDicePool prevents a roll which would create an own-token
+// collision for any otherwise movable token. This deliberately filters the
+// value even when a different token could use it, so humans and bots never
+// enter the single-alternative auto-move situation caused by that collision.
+// Safe shared-track destinations are allowed by canLandOnSquare.
+func (g *authGame) authoritativeDicePool() (allowed []int, rejected []int) {
+	player := g.player(g.Current)
+	if player == nil {
+		return nil, nil
+	}
+	for dice := 1; dice <= 6; dice++ {
+		ownCollision := false
+		for pieceID, piece := range player.Pieces {
+			if !g.legalWithoutOwnOccupancy(pieceID, dice) {
+				continue
+			}
+			passed, position := g.destination(player, piece, dice)
+			if !g.canLandOnSquare(player.ID, pieceID, authDestination{Passed: passed, Position: position}) {
+				ownCollision = true
+				break
+			}
+		}
+		if ownCollision {
+			rejected = append(rejected, dice)
+		} else {
+			allowed = append(allowed, dice)
+		}
+	}
+	return allowed, rejected
+}
+
+func (g *authGame) rollAuthoritativeDice() (int, []int, error) {
+	allowed, rejected := g.authoritativeDicePool()
+	if len(allowed) == 0 {
+		return 0, rejected, errNoAllowedDiceValues
+	}
+	index, err := secureRandomInt(len(allowed))
+	if err != nil {
+		return 0, rejected, err
+	}
+	return allowed[index], rejected, nil
+}
+
 func (g *authGame) moves() map[int][]authMoveData {
 	result := map[int][]authMoveData{}
 	p := g.player(g.Current)
@@ -590,7 +636,11 @@ func (g *authGame) nextRank() int {
 }
 func (g *authGame) timeout(tick int64) error {
 	if g.Phase == "roll" {
-		dice, err := rollDice()
+		dice, _, err := g.rollAuthoritativeDice()
+		if errors.Is(err, errNoAllowedDiceValues) {
+			g.next(tick)
+			return nil
+		}
 		if err != nil {
 			return err
 		}

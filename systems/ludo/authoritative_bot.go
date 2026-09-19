@@ -1,6 +1,7 @@
 package ludo
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -581,29 +582,11 @@ func evaluateAuthoritativeMove(game *authGame, player *authPlayer, move authorit
 }
 
 func authoritativeBotDicePool(game *authGame, logger runtime.Logger) []int {
-	player := game.player(game.Current)
-	if player == nil {
-		return nil
-	}
-	allowed := make([]int, 0, 6)
-	for dice := 1; dice <= 6; dice++ {
-		hasMoveIgnoringOwnToken := false
-		hasLegalMove := false
-		for pieceID := range player.Pieces {
-			if game.legalWithoutOwnOccupancy(pieceID, dice) {
-				hasMoveIgnoringOwnToken = true
-			}
-			if game.legal(pieceID, dice) {
-				hasLegalMove = true
-			}
+	allowed, rejected := game.authoritativeDicePool()
+	if logger != nil {
+		for _, dice := range rejected {
+			logger.Info("BOT_DICE_REJECTED dice=%d reason=OWN_TOKEN_OCCUPIED", dice)
 		}
-		if hasMoveIgnoringOwnToken && !hasLegalMove {
-			if logger != nil {
-				logger.Info("BOT_DICE_REJECTED dice=%d reason=NO_VALID_DESTINATION", dice)
-			}
-			continue
-		}
-		allowed = append(allowed, dice)
 	}
 	return allowed
 }
@@ -611,11 +594,7 @@ func authoritativeBotDicePool(game *authGame, logger runtime.Logger) []int {
 func rollAuthoritativeBotDice(game *authGame, logger runtime.Logger) (int, error) {
 	allowed := authoritativeBotDicePool(game, logger)
 	if len(allowed) == 0 {
-		dice, err := rollDice()
-		if err == nil && logger != nil {
-			logger.Info("BOT_DICE_SELECTED dice=%d", dice)
-		}
-		return dice, err
+		return 0, errNoAllowedDiceValues
 	}
 	index, err := secureRandomInt(len(allowed))
 	if err != nil {
@@ -770,6 +749,13 @@ func performAuthoritativeBotAction(game *authGame, logger runtime.Logger, tick i
 	switch game.Phase {
 	case "roll":
 		dice, err := rollAuthoritativeBotDice(game, logger)
+		if errors.Is(err, errNoAllowedDiceValues) {
+			if logger != nil {
+				logger.Info("BOT_DICE_POOL_EMPTY player=%d action=PASS_TURN", player.ID)
+			}
+			game.next(tick)
+			return nil
+		}
 		if err != nil {
 			return err
 		}

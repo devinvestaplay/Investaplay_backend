@@ -3,6 +3,7 @@ package ludo
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -91,14 +92,26 @@ func TestWaitForMoveBroadcastUsesSameSelectableRule(t *testing.T) {
 	}
 }
 
-func TestBotDiceRemainsAllowedWhenAnotherTokenCanMove(t *testing.T) {
+func TestDiceRejectedWhenOneTokenCollidesDespiteAnotherValidMove(t *testing.T) {
 	game := ownCollisionGame(2)
 	game.player(0).Bot = true
 	game.Phase = "roll"
 	game.Rolls = nil
 	pool := authoritativeBotDicePool(game, nil)
-	if !containsDice(pool, 2) {
-		t.Fatalf("dice 2 was filtered even though token 0 can move: %v", pool)
+	if containsDice(pool, 2) {
+		t.Fatalf("dice 2 remained available despite an own-token collision: %v", pool)
+	}
+}
+
+func TestHumanAndBotUseSameOwnCollisionDicePool(t *testing.T) {
+	game := ownCollisionGame(2)
+	game.Phase = "roll"
+	game.Rolls = nil
+	humanPool, _ := game.authoritativeDicePool()
+	game.player(0).Bot = true
+	botPool := authoritativeBotDicePool(game, nil)
+	if !reflect.DeepEqual(humanPool, botPool) {
+		t.Fatalf("human and bot dice pools differ: human=%v bot=%v", humanPool, botPool)
 	}
 }
 
@@ -157,6 +170,17 @@ func TestRollSixCanSpawnOntoOwnTokenOnSafeStart(t *testing.T) {
 		if _, valid := moves[pieceID]; !valid {
 			t.Fatalf("base token %d could not stack on its safe start square", pieceID)
 		}
+	}
+}
+
+func TestSafeSquareStackDoesNotFilterDice(t *testing.T) {
+	game := authTestGame(2)
+	putAuthPiece(game, 0, 0, 1)
+	game.Phase = "roll"
+	game.Rolls = nil
+	pool, rejected := game.authoritativeDicePool()
+	if !containsDice(pool, 6) || containsDice(rejected, 6) {
+		t.Fatalf("safe start stack incorrectly filtered dice 6: allowed=%v rejected=%v", pool, rejected)
 	}
 }
 

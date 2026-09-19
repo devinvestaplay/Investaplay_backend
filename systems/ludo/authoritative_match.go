@@ -485,8 +485,21 @@ func (m *AuthoritativeLudoMatch) MatchLoop(ctx context.Context, logger runtime.L
 				if game.Phase != "roll" {
 					return errors.New("not waiting for a roll")
 				}
+				var rejected []int
 				var err error
-				diceResult, err = rollDice()
+				diceResult, rejected, err = game.rollAuthoritativeDice()
+				if logger != nil {
+					for _, dice := range rejected {
+						logger.Info("HUMAN_DICE_REJECTED player=%d dice=%d reason=OWN_TOKEN_OCCUPIED", p.ID, dice)
+					}
+				}
+				if errors.Is(err, errNoAllowedDiceValues) {
+					if logger != nil {
+						logger.Info("HUMAN_DICE_POOL_EMPTY player=%d action=PASS_TURN", p.ID)
+					}
+					game.next(tick)
+					return nil
+				}
 				if err != nil {
 					return err
 				}
